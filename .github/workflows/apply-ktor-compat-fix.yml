@@ -41,7 +41,7 @@ jobs:
 [versions]
 agp = "8.9.0"
 kotlin = "2.1.0"
-compose-multiplatform = "1.10.3"
+compose-multiplatform = "1.8.0"
 androidx-core = "1.15.0"
 androidx-activity = "1.10.1"
 coroutines = "1.10.2"
@@ -70,13 +70,6 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 EOF
-
-      - name: Show updated version catalog
-        working-directory: ${{ steps.project.outputs.dir }}
-        shell: bash
-        run: |
-          echo "===== gradle/libs.versions.toml ====="
-          cat gradle/libs.versions.toml
 
       - name: Commit and push fix
         shell: bash
