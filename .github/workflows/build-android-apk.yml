@@ -94,4 +94,63 @@ jobs:
       - name: Build debug APK
         id: build
         continue-on-error: true
-        working-directory: ${{ steps.project.outputs
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          mkdir -p build-logs
+          set -o pipefail
+
+          ./gradlew \
+            clean \
+            :androidApp:assembleDebug \
+            --stacktrace \
+            --info \
+            --warning-mode all \
+            2>&1 | tee build-logs/gradle-build.log
+
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Collect output paths
+        if: always()
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          mkdir -p build-logs
+
+          {
+            echo "===== APK FILES ====="
+            find . -type f \( -name "*.apk" -o -name "*.aab" \) | sort || true
+            echo
+            echo "===== BUILD REPORTS ====="
+            find . -type f -path "*/build/reports/*" | sort || true
+            echo
+            echo "===== BUILD OUTPUTS ====="
+            find . -type f -path "*/build/outputs/*" | sort || true
+          } > build-logs/artifacts-index.log 2>&1
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ${{ steps.project.outputs.dir }}/build-logs/**
+            ${{ steps.project.outputs.dir }}/**/build/reports/**
+            ${{ steps.project.outputs.dir }}/**/build/outputs/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload APK artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: releasehub-debug-apk
+          path: |
+            ${{ steps.project.outputs.dir }}/androidApp/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail job if Gradle failed
+        if: always() && steps.build.outputs.exit_code != '0'
+        run: |
+          echo "Gradle build failed."
+          echo "Open the build-logs artifact and read build-logs/gradle-build.log."
+          exit 1
