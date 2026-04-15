@@ -1,0 +1,204 @@
+name: Fix Ktor classpath wiring
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Apply architecture fix
+        shell: bash
+        run: |
+          mkdir -p androidApp/src/main/kotlin/com/punkcrypto/releasehub
+          mkdir -p sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github
+
+          cat > androidApp/src/main/kotlin/com/punkcrypto/releasehub/MainActivity.kt <<'EOF'
+          package com.punkcrypto.releasehub
+
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import com.punkcrypto.releasehub.app.ReleaseHubApp
+          import com.punkcrypto.releasehub.app.ReleaseStoreDependencies
+          import com.punkcrypto.releasehub.local.store.AndroidApkCacheStore
+          import com.punkcrypto.releasehub.local.store.AndroidPackageInstallLauncher
+          import com.punkcrypto.releasehub.local.store.ApkCacheStore
+          import com.punkcrypto.releasehub.local.store.PackageInstallLauncher
+          import com.punkcrypto.releasehub.sdk.github.GitHubReleaseSdk
+          import com.punkcrypto.releasehub.sdk.github.KtorGitHubReleaseSdk
+          import com.punkcrypto.releasehub.sdk.github.createGitHubHttpClient
+
+          class MainActivity : ComponentActivity() {
+              private val dependencies: ReleaseStoreDependencies by lazy {
+                  AndroidReleaseStoreDependencies(this)
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContent {
+                      ReleaseHubApp(dependencies = dependencies)
+                  }
+              }
+          }
+
+          private class AndroidReleaseStoreDependencies(
+              activity: ComponentActivity,
+          ) : ReleaseStoreDependencies {
+
+              private val appContext = activity.applicationContext
+
+              override val gitHubSdk: GitHubReleaseSdk = KtorGitHubReleaseSdk()
+
+              override val apkCacheStore: ApkCacheStore = AndroidApkCacheStore(
+                  context = appContext,
+                  httpClient = createGitHubHttpClient(),
+              )
+
+              override val packageInstallLauncher: PackageInstallLauncher =
+                  AndroidPackageInstallLauncher(appContext)
+          }
+          EOF
+
+          cat > sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github/KtorGitHubReleaseSdk.kt <<'EOF'
+          package com.punkcrypto.releasehub.sdk.github
+
+          import com.punkcrypto.releasehub.core.model.RepositorySummary
+          import com.punkcrypto.releasehub.core.model.ReleaseSummary
+          import io.ktor.client.HttpClient
+          import io.ktor.client.call.body
+          import io.ktor.client.plugins.ClientRequestException
+          import io.ktor.client.request.get
+          import io.ktor.client.request.header
+          import io.ktor.client.request.parameter
+
+          class KtorGitHubReleaseSdk(
+              private val client: HttpClient = createGitHubHttpClient(),
+              private val config: GitHubSdkConfig = GitHubSdkConfig(),
+          ) : GitHubReleaseSdk {
+
+              override suspend fun loadFeaturedRepositories(): List<RepositorySummary> {
+                  return searchRepositories(config.featuredQuery)
+              }
+
+              override suspend fun searchRepositories(query: String): List<RepositorySummary> {
+                  val normalizedQuery = query.ifBlank { config.featuredQuery }
+
+                  val response = runCatching {
+                      client.get("search/repositories") {
+                          parameter("q", normalizedQuery)
+                          parameter("sort", "stars")
+                          parameter("order", "desc")
+                          parameter("per_page", 20)
+                          config.token?.takeIf { it.isNotBlank() }?.let { token ->
+                              header("Authorization", "Bearer $token")
+                          }
+                      }.body<GitHubRepositorySearchResponse>()
+                  }.getOrElse { throwable ->
+                      throw throwable.toReadableException()
+                  }
+
+                  return response.items.map { it.toModel() }
+              }
+
+              override suspend fun loadReleases(
+                  owner: String,
+                  repository: String,
+              ): List<ReleaseSummary> {
+                  return runCatching {
+                      client.get("repos/$owner/$repository/releases") {
+                          parameter("per_page", 25)
+                          config.token?.takeIf { it.isNotBlank() }?.let { token ->
+                              header("Authorization", "Bearer $token")
+                          }
+                      }.body<List<GitHubReleaseDto>>()
+                  }.getOrElse { throwable ->
+                      throw throwable.toReadableException()
+                  }.map { it.toModel() }
+              }
+          }
+
+          private fun Throwable.toReadableException(): Throwable =
+              when (this) {
+                  is ClientRequestException -> {
+                      if (response.status.value == 403) {
+                          IllegalStateException(
+                              "GitHub API rate limit reached.\nAdd a token later or wait for the limit to reset.",
+                              this,
+                          )
+                      } else {
+                          IllegalStateException(
+                              "GitHub request failed with ${response.status.value}.",
+                              this,
+                          )
+                      }
+                  }
+                  else -> this
+              }
+          EOF
+
+          cat > androidApp/build.gradle.kts <<'EOF'
+          plugins {
+              alias(libs.plugins.android.application)
+              alias(libs.plugins.kotlin.android)
+              alias(libs.plugins.compose.compiler)
+          }
+
+          android {
+              namespace = "com.punkcrypto.releasehub"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.punkcrypto.releasehub"
+                  minSdk = 26
+                  targetSdk = 35
+                  versionCode = 1
+                  versionName = "0.1.0"
+              }
+
+              buildFeatures {
+                  compose = true
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+
+          dependencies {
+              implementation(project(":composeApp"))
+              implementation(compose.ui)
+              implementation(compose.material3)
+              implementation(libs.androidx.activity.compose)
+              implementation(libs.androidx.core.ktx)
+              implementation(libs.kotlinx.coroutines.android)
+          }
+          EOF
+
+      - name: Commit changes
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add androidApp/src/main/kotlin/com/punkcrypto/releasehub/MainActivity.kt \
+                  sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github/KtorGitHubReleaseSdk.kt \
+                  androidApp/build.gradle.kts
+          git commit -m "Fix Ktor classpath wiring"
+          git push
