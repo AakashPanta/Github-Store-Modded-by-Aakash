@@ -6,9 +6,9 @@ import com.punkcrypto.releasehub.core.model.ReleaseAsset
 import com.punkcrypto.releasehub.core.model.ReleaseSummary
 import com.punkcrypto.releasehub.core.model.RepositorySummary
 import io.ktor.client.HttpClient
-import io.ktor.client.statement.bodyAsChannel
-import io.ktor.client.statement.contentLength
 import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.http.HttpHeaders
 import io.ktor.utils.io.readAvailable
 import java.io.File
 import java.io.FileOutputStream
@@ -66,14 +66,17 @@ class AndroidApkCacheStore(
                 releaseName = release.displayTitle,
                 absolutePath = targetFile.absolutePath,
                 sizeBytes = targetFile.length(),
-                downloadedAtEpochMillis = System.currentTimeMillis(),
+                downloadedAtEpochMillis = System.currentTimeMillis()
             )
             upsert(existing)
             return@withContext existing
         }
 
         val response = httpClient.get(asset.downloadUrl)
-        val totalBytes = response.contentLength()?.takeIf { it > 0 } ?: asset.sizeBytes
+        val totalBytes: Long = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+            ?.takeIf { it > 0L }
+            ?: asset.sizeBytes
+
         val channel = response.bodyAsChannel()
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
         var downloaded = 0L
@@ -83,9 +86,11 @@ class AndroidApkCacheStore(
                 val read = channel.readAvailable(buffer)
                 if (read == -1) break
                 if (read == 0) continue
+
                 output.write(buffer, 0, read)
-                downloaded += read
-                if (totalBytes > 0) {
+                downloaded += read.toLong()
+
+                if (totalBytes > 0L) {
                     onProgress((downloaded.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f))
                 }
             }
@@ -99,12 +104,12 @@ class AndroidApkCacheStore(
             releaseName = release.displayTitle,
             absolutePath = targetFile.absolutePath,
             sizeBytes = targetFile.length(),
-            downloadedAtEpochMillis = System.currentTimeMillis(),
+            downloadedAtEpochMillis = System.currentTimeMillis()
         )
 
         upsert(cachedArtifact)
         onProgress(1f)
-        cachedArtifact
+        return@withContext cachedArtifact
     }
 
     private fun readIndex(): CacheIndex {
@@ -129,7 +134,7 @@ class AndroidApkCacheStore(
 
 @Serializable
 private data class CacheIndex(
-    val items: List<CachedArtifact> = emptyList(),
+    val items: List<CachedArtifact> = emptyList()
 )
 
 private fun String.sanitizeFileName(): String = replace(Regex("[^A-Za-z0-9._-]"), "_")

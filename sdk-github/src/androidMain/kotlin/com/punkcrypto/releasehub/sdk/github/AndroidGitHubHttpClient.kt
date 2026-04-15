@@ -5,6 +5,7 @@ import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.request.header
 import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
@@ -15,14 +16,14 @@ fun createGitHubHttpClient(): HttpClient = HttpClient(OkHttp) {
             Json {
                 ignoreUnknownKeys = true
                 explicitNulls = false
-            },
+            }
         )
     }
 
     install(HttpTimeout) {
-        requestTimeoutMillis = 120_000
-        connectTimeoutMillis = 30_000
-        socketTimeoutMillis = 120_000
+        requestTimeoutMillis = 120000
+        connectTimeoutMillis = 30000
+        socketTimeoutMillis = 120000
     }
 
     defaultRequest {
