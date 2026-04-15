@@ -1,0 +1,124 @@
+name: Disable auto triggers in workflows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  disable-auto-triggers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Rewrite workflow triggers to manual only
+        shell: bash
+        run: |
+          set -e
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          workflows_dir = Path(".github/workflows")
+          if not workflows_dir.exists():
+              print("No .github/workflows directory found.")
+              raise SystemExit(1)
+
+          auto_trigger_words = (
+              "push:",
+              "pull_request:",
+              "schedule:",
+              "workflow_run:",
+              "repository_dispatch:",
+              "pull_request_target:",
+          )
+
+          changed_files = []
+
+          def replace_on_block(text: str):
+              lines = text.splitlines(keepends=True)
+
+              start = None
+              for i, line in enumerate(lines):
+                  if re.match(r'^(on|"on"|\'on\'):\s*$', line.strip()):
+                      start = i
+                      break
+
+              if start is None:
+                  return text, False, "No top-level on block found"
+
+              end = len(lines)
+              for j in range(start + 1, len(lines)):
+                  # next top-level YAML key
+                  if re.match(r'^[A-Za-z0-9_.-]+:\s*$', lines[j]) and not lines[j].startswith((" ", "\t")):
+                      end = j
+                      break
+
+              old_block = "".join(lines[start:end])
+
+              if "workflow_dispatch:" in old_block and not any(word in old_block for word in auto_trigger_words):
+                  return text, False, "Already manual only"
+
+              if not any(word in old_block for word in auto_trigger_words):
+                  return text, False, "No automatic triggers found"
+
+              new_block = "on:\n  workflow_dispatch:\n"
+              new_text = "".join(lines[:start]) + new_block + "".join(lines[end:])
+              return new_text, True, "Replaced automatic triggers"
+
+          for path in sorted(workflows_dir.glob("*")):
+              if path.suffix not in (".yml", ".yaml"):
+                  continue
+
+              original = path.read_text(encoding="utf-8")
+              updated, changed, reason = replace_on_block(original)
+
+              print(f"{path}: {reason}")
+
+              if changed:
+                  path.write_text(updated, encoding="utf-8")
+                  changed_files.append(str(path))
+
+          print("\nChanged files:")
+          if changed_files:
+              for item in changed_files:
+                  print(f" - {item}")
+          else:
+              print(" - none")
+          PY
+
+      - name: Show workflow files after rewrite
+        shell: bash
+        run: |
+          echo "===== WORKFLOW FILES ====="
+          find .github/workflows -maxdepth 1 -type f \( -name "*.yml" -o -name "*.yaml" \) | sort
+          echo
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -e "$f" ] || continue
+            echo "===== $f ====="
+            sed -n '1,80p' "$f"
+            echo
+          done
+
+      - name: Commit and push changes
+        shell: bash
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add .github/workflows
+
+          if git diff --cached --quiet; then
+            echo "No workflow trigger changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Disable automatic workflow triggers"
+          git push
