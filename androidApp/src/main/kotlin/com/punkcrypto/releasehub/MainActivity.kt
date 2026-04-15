@@ -14,7 +14,6 @@ import com.punkcrypto.releasehub.sdk.github.KtorGitHubReleaseSdk
 import com.punkcrypto.releasehub.sdk.github.createGitHubHttpClient
 
 class MainActivity : ComponentActivity() {
-
     private val dependencies: ReleaseStoreDependencies by lazy {
         AndroidReleaseStoreDependencies(this)
     }
@@ -31,13 +30,15 @@ private class AndroidReleaseStoreDependencies(
     activity: ComponentActivity,
 ) : ReleaseStoreDependencies {
 
-    private val httpClient = createGitHubHttpClient()
     private val appContext = activity.applicationContext
 
-    override val gitHubSdk: GitHubReleaseSdk = KtorGitHubReleaseSdk(httpClient)
+    override val gitHubSdk: GitHubReleaseSdk = KtorGitHubReleaseSdk()
+
     override val apkCacheStore: ApkCacheStore = AndroidApkCacheStore(
         context = appContext,
-        httpClient = httpClient,
+        httpClient = createGitHubHttpClient(),
     )
-    override val packageInstallLauncher: PackageInstallLauncher = AndroidPackageInstallLauncher(appContext)
+
+    override val packageInstallLauncher: PackageInstallLauncher =
+        AndroidPackageInstallLauncher(appContext)
 }

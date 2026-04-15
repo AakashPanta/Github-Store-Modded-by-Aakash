@@ -10,7 +10,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 
 class KtorGitHubReleaseSdk(
-    private val client: HttpClient,
+    private val client: HttpClient = createGitHubHttpClient(),
     private val config: GitHubSdkConfig = GitHubSdkConfig(),
 ) : GitHubReleaseSdk {
 
@@ -30,7 +30,7 @@ class KtorGitHubReleaseSdk(
                 config.token?.takeIf { it.isNotBlank() }?.let { token ->
                     header("Authorization", "Bearer $token")
                 }
-            }.body<RepositorySearchResponseDto>()
+            }.body<GitHubRepositorySearchResponse>()
         }.getOrElse { throwable ->
             throw throwable.toReadableException()
         }
@@ -38,31 +38,37 @@ class KtorGitHubReleaseSdk(
         return response.items.map { it.toModel() }
     }
 
-    override suspend fun loadReleases(owner: String, repository: String): List<ReleaseSummary> {
+    override suspend fun loadReleases(
+        owner: String,
+        repository: String,
+    ): List<ReleaseSummary> {
         return runCatching {
             client.get("repos/$owner/$repository/releases") {
                 parameter("per_page", 25)
                 config.token?.takeIf { it.isNotBlank() }?.let { token ->
                     header("Authorization", "Bearer $token")
                 }
-            }.body<List<ReleaseDto>>()
+            }.body<List<GitHubReleaseDto>>()
         }.getOrElse { throwable ->
             throw throwable.toReadableException()
         }.map { it.toModel() }
     }
 }
 
-private fun Throwable.toReadableException(): Throwable = when (this) {
-    is ClientRequestException -> {
-        if (response.status.value == 403) {
-            IllegalStateException(
-                "GitHub API rate limit reached. Add a token later or wait for the limit to reset.",
-                this,
-            )
-        } else {
-            IllegalStateException("GitHub request failed with ${response.status.value}.", this)
+private fun Throwable.toReadableException(): Throwable =
+    when (this) {
+        is ClientRequestException -> {
+            if (response.status.value == 403) {
+                IllegalStateException(
+                    "GitHub API rate limit reached.\nAdd a token later or wait for the limit to reset.",
+                    this,
+                )
+            } else {
+                IllegalStateException(
+                    "GitHub request failed with ${response.status.value}.",
+                    this,
+                )
+            }
         }
+        else -> this
     }
-
-    else -> this
-}
