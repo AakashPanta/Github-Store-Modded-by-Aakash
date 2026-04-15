@@ -749,20 +749,3 @@ private fun EmptyState(
         )
     }
 }
-PY
-
-      - name: Commit and push
-        run: |
-          set -e
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-          git commit -m "Fix Compose UI source file"
-          git push
-
-
-This code changes the action not workable
