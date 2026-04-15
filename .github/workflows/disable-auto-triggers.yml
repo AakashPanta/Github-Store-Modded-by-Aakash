@@ -1,4 +1,4 @@
-name: Disable auto triggers in workflows
+name: Disable auto triggers safely
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Rewrite workflow triggers to manual only
+      - name: Safely remove automatic workflow triggers
         shell: bash
         run: |
           set -e
@@ -30,59 +30,168 @@ jobs:
               print("No .github/workflows directory found.")
               raise SystemExit(1)
 
-          auto_trigger_words = (
-              "push:",
-              "pull_request:",
-              "schedule:",
-              "workflow_run:",
-              "repository_dispatch:",
-              "pull_request_target:",
-          )
+          AUTO_KEYS = {
+              "push",
+              "pull_request",
+              "pull_request_target",
+              "schedule",
+              "workflow_run",
+              "repository_dispatch",
+          }
+
+          def leading_spaces(s: str) -> int:
+              return len(s) - len(s.lstrip(" "))
+
+          def is_top_level_key(line: str) -> bool:
+              return bool(re.match(r'^[A-Za-z0-9_.-]+:\s*$', line)) or bool(re.match(r'^(["\'][^"\']+["\']):\s*$', line))
+
+          def key_name(line: str):
+              m = re.match(r'^([A-Za-z0-9_.-]+):\s*$', line)
+              if m:
+                  return m.group(1)
+              m = re.match(r'^(["\'])([^"\']+)\1:\s*$', line)
+              if m:
+                  return m.group(2)
+              return None
+
+          def find_on_block(lines):
+              on_start = None
+              on_end = None
+
+              for i, raw in enumerate(lines):
+                  stripped = raw.rstrip("\n")
+                  if leading_spaces(raw) == 0 and key_name(stripped) == "on":
+                      on_start = i
+                      break
+
+              if on_start is None:
+                  return None, None
+
+              for j in range(on_start + 1, len(lines)):
+                  stripped = lines[j].rstrip("\n")
+                  if leading_spaces(lines[j]) == 0 and is_top_level_key(stripped):
+                      on_end = j
+                      break
+
+              if on_end is None:
+                  on_end = len(lines)
+
+              return on_start, on_end
+
+          def sanitize_on_block(block_lines):
+              """
+              Preserves workflow_dispatch and its nested inputs.
+              Removes automatic triggers and their nested config.
+              Handles these forms:
+                on:
+                  workflow_dispatch:
+                    inputs: ...
+                  push:
+                    branches: [main]
+
+              Also handles inline form:
+                on: workflow_dispatch
+                on: [push, workflow_dispatch]
+              """
+              if not block_lines:
+                  return block_lines, False, "Empty on block"
+
+              first = block_lines[0].rstrip("\n")
+
+              # Inline on: forms
+              if re.match(r'^on:\s*.*\S\s*$', first) and first.strip() != "on:":
+                  value = first.split(":", 1)[1].strip()
+                  if "workflow_dispatch" in value:
+                      new_block = ["on:\n", "  workflow_dispatch:\n"]
+                      return new_block, True, "Converted inline on: to manual-only"
+                  else:
+                      new_block = ["on:\n", "  workflow_dispatch:\n"]
+                      return new_block, True, "Replaced inline automatic triggers"
+
+              # Multiline block form
+              kept = []
+              kept.append("on:\n")
+
+              i = 1
+              changed = False
+              found_workflow_dispatch = False
+
+              while i < len(block_lines):
+                  line = block_lines[i]
+                  stripped = line.rstrip("\n")
+                  indent = leading_spaces(line)
+
+                  if indent < 2:
+                      i += 1
+                      continue
+
+                  # Trigger key at indent 2
+                  if indent == 2 and stripped.strip().endswith(":"):
+                      trigger = key_name(stripped.strip())
+                      start = i
+                      j = i + 1
+                      while j < len(block_lines):
+                          next_line = block_lines[j]
+                          next_indent = leading_spaces(next_line)
+                          next_stripped = next_line.rstrip("\n")
+
+                          if next_indent == 2 and next_stripped.strip().endswith(":"):
+                              break
+                          if next_indent < 2:
+                              break
+                          j += 1
+
+                      chunk = block_lines[start:j]
+
+                      if trigger == "workflow_dispatch":
+                          kept.extend(chunk)
+                          found_workflow_dispatch = True
+                      elif trigger in AUTO_KEYS:
+                          changed = True
+                      else:
+                          # Keep unknown/manual-safe triggers only if you want.
+                          # For this workflow, unknown trigger keys inside `on:` are removed
+                          # unless they are workflow_dispatch.
+                          changed = True
+
+                      i = j
+                      continue
+
+                  # Unexpected content under on:
+                  i += 1
+
+              if not found_workflow_dispatch:
+                  kept.append("  workflow_dispatch:\n")
+                  changed = True
+
+              # If nothing changed but block is already manual-only, report that.
+              if not changed:
+                  return block_lines, False, "Already manual only"
+
+              return kept, True, "Removed auto triggers and preserved workflow_dispatch"
 
           changed_files = []
-
-          def replace_on_block(text: str):
-              lines = text.splitlines(keepends=True)
-
-              start = None
-              for i, line in enumerate(lines):
-                  if re.match(r'^(on|"on"|\'on\'):\s*$', line.strip()):
-                      start = i
-                      break
-
-              if start is None:
-                  return text, False, "No top-level on block found"
-
-              end = len(lines)
-              for j in range(start + 1, len(lines)):
-                  # next top-level YAML key
-                  if re.match(r'^[A-Za-z0-9_.-]+:\s*$', lines[j]) and not lines[j].startswith((" ", "\t")):
-                      end = j
-                      break
-
-              old_block = "".join(lines[start:end])
-
-              if "workflow_dispatch:" in old_block and not any(word in old_block for word in auto_trigger_words):
-                  return text, False, "Already manual only"
-
-              if not any(word in old_block for word in auto_trigger_words):
-                  return text, False, "No automatic triggers found"
-
-              new_block = "on:\n  workflow_dispatch:\n"
-              new_text = "".join(lines[:start]) + new_block + "".join(lines[end:])
-              return new_text, True, "Replaced automatic triggers"
 
           for path in sorted(workflows_dir.glob("*")):
               if path.suffix not in (".yml", ".yaml"):
                   continue
 
-              original = path.read_text(encoding="utf-8")
-              updated, changed, reason = replace_on_block(original)
+              text = path.read_text(encoding="utf-8")
+              lines = text.splitlines(keepends=True)
+
+              on_start, on_end = find_on_block(lines)
+              if on_start is None:
+                  print(f"{path}: No top-level on block found")
+                  continue
+
+              old_block = lines[on_start:on_end]
+              new_block, changed, reason = sanitize_on_block(old_block)
 
               print(f"{path}: {reason}")
 
               if changed:
-                  path.write_text(updated, encoding="utf-8")
+                  new_text = "".join(lines[:on_start] + new_block + lines[on_end:])
+                  path.write_text(new_text, encoding="utf-8")
                   changed_files.append(str(path))
 
           print("\nChanged files:")
@@ -93,16 +202,14 @@ jobs:
               print(" - none")
           PY
 
-      - name: Show workflow files after rewrite
+      - name: Show updated workflow headers
         shell: bash
         run: |
-          echo "===== WORKFLOW FILES ====="
-          find .github/workflows -maxdepth 1 -type f \( -name "*.yml" -o -name "*.yaml" \) | sort
-          echo
+          echo "===== UPDATED WORKFLOWS ====="
           for f in .github/workflows/*.yml .github/workflows/*.yaml; do
             [ -e "$f" ] || continue
-            echo "===== $f ====="
-            sed -n '1,80p' "$f"
+            echo "----- $f -----"
+            sed -n '1,60p' "$f"
             echo
           done
 
@@ -120,5 +227,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Disable automatic workflow triggers"
+          git commit -m "Disable automatic workflow triggers safely"
           git push
