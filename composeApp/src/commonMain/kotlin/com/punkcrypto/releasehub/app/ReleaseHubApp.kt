@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -64,6 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.punkcrypto.releasehub.core.model.CachedArtifact
+import com.punkcrypto.releasehub.core.model.ReleaseAsset
 import com.punkcrypto.releasehub.core.model.ReleaseSummary
 import com.punkcrypto.releasehub.core.model.RepositorySummary
 import com.punkcrypto.releasehub.core.model.asCompactCount
@@ -228,6 +228,7 @@ private fun BrowseScreen(
         Spacer(Modifier.size(8.dp))
         HeroCard()
         Spacer(Modifier.size(16.dp))
+
         OutlinedTextField(
             value = uiState.query,
             onValueChange = onQueryChange,
@@ -239,33 +240,39 @@ private fun BrowseScreen(
             keyboardActions = KeyboardActions(onSearch = { onSearch() }),
             trailingIcon = {
                 TextButton(onClick = onSearch) {
-                    Text("Go")
+                    Text("Search")
                 }
             },
         )
+
         Spacer(Modifier.size(12.dp))
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FilterChip(
-                selected = uiState.query.isBlank(),
+                selected = uiState.featuredOnly,
                 onClick = onRefreshFeatured,
                 label = { Text("Featured") },
             )
             AssistChip(
-                onClick = onSearch,
-                label = { Text(if (uiState.query.isBlank()) "Load curated Android picks" else "Run search") },
+                onClick = onRefreshFeatured,
+                label = { Text("Refresh") },
                 leadingIcon = {
                     Icon(Icons.Rounded.Android, contentDescription = null)
                 },
             )
         }
-        Spacer(Modifier.size(12.dp))
+
+        Spacer(Modifier.size(16.dp))
+
         when {
-            uiState.isLoadingBrowse -> {
+            uiState.isLoadingRepositories -> {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 40.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     CircularProgressIndicator()
@@ -275,69 +282,22 @@ private fun BrowseScreen(
             uiState.repositories.isEmpty() -> {
                 EmptyState(
                     title = "No repositories yet",
-                    body = "Search for a repository or reload featured Android-friendly projects.",
+                    body = "Search GitHub repositories or refresh featured apps.",
                 )
             }
 
             else -> {
                 LazyColumn(
-                    contentPadding = PaddingValues(bottom = 120.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(uiState.repositories, key = { it.id }) { repository ->
+                    items(uiState.repositories) { repo ->
                         RepositoryCard(
-                            repository = repository,
-                            onOpen = { onOpenRepository(repository) },
+                            repository = repo,
+                            onClick = { onOpenRepository(repo) },
                         )
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RepositoryDetailScreen(
-    repository: RepositorySummary,
-    releases: List<ReleaseSummary>,
-    isLoading: Boolean,
-    activeDownloads: Map<Long, Float>,
-    onInstallAsset: (ReleaseSummary, com.punkcrypto.releasehub.core.model.ReleaseAsset) -> Unit,
-) {
-    if (isLoading) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-        return
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-    ) {
-        Spacer(Modifier.size(8.dp))
-        RepositoryHeaderCard(repository)
-        Spacer(Modifier.size(12.dp))
-
-        if (releases.isEmpty()) {
-            EmptyState(
-                title = "No public releases found",
-                body = "This repository may use tags only, private releases, or non-APK assets.",
-            )
-            return
-        }
-
-        LazyColumn(
-            contentPadding = PaddingValues(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(releases, key = { it.id }) { release ->
-                ReleaseCard(
-                    release = release,
-                    activeDownloads = activeDownloads,
-                    onInstallAsset = { asset -> onInstallAsset(release, asset) },
-                )
             }
         }
     }
@@ -355,50 +315,41 @@ private fun LibraryScreen(
             .fillMaxSize()
             .padding(horizontal = 16.dp),
     ) {
-        Spacer(Modifier.size(8.dp))
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
-            ),
+        Spacer(Modifier.size(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column {
-                    Text(
-                        text = "Local APK cache",
-                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = "Reopen previously downloaded installers from private app storage.",
-                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                TextButton(onClick = onRefresh) {
-                    Text("Refresh")
-                }
+            Text(
+                text = "Cached APKs",
+                style = androidx.compose.material3.MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            TextButton(onClick = onRefresh) {
+                Text("Refresh")
             }
         }
-        Spacer(Modifier.size(12.dp))
+
+        Spacer(Modifier.size(8.dp))
 
         when {
             isLoading -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 40.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
                     CircularProgressIndicator()
                 }
             }
 
             items.isEmpty() -> {
                 EmptyState(
-                    title = "Your cache is empty",
-                    body = "Install an APK from the Browse tab and it will appear here.",
+                    title = "No cached apps",
+                    body = "Installed APK downloads will appear here for quick reinstall.",
                 )
             }
 
@@ -407,10 +358,64 @@ private fun LibraryScreen(
                     contentPadding = PaddingValues(bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(items, key = { it.assetId }) { item ->
+                    items(items) { item ->
                         CachedArtifactCard(
                             item = item,
                             onReinstall = { onReinstall(item) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RepositoryDetailScreen(
+    repository: RepositorySummary,
+    releases: List<ReleaseSummary>,
+    isLoading: Boolean,
+    activeDownloads: Map<Long, Float>,
+    onInstallAsset: (ReleaseSummary, ReleaseAsset) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+    ) {
+        Spacer(Modifier.size(12.dp))
+        RepositoryHeaderCard(repository)
+        Spacer(Modifier.size(16.dp))
+
+        when {
+            isLoading -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 40.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+            }
+
+            releases.isEmpty() -> {
+                EmptyState(
+                    title = "No releases found",
+                    body = "This repository does not currently expose GitHub releases.",
+                )
+            }
+
+            else -> {
+                LazyColumn(
+                    contentPadding = PaddingValues(bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(releases) { release ->
+                        ReleaseCard(
+                            release = release,
+                            activeDownloads = activeDownloads,
+                            onInstallAsset = { asset -> onInstallAsset(release, asset) },
                         )
                     }
                 }
@@ -424,7 +429,7 @@ private fun HeroCard() {
     Card(
         shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(
-            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
         ),
     ) {
         Column(
@@ -432,75 +437,72 @@ private fun HeroCard() {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                text = "Android-first GitHub release browser",
-                style = androidx.compose.material3.MaterialTheme.typography.titleLarge,
+                text = "GitHub releases, simplified",
+                style = androidx.compose.material3.MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "Search repositories, inspect releases, and launch APK installs in one tap. The MVP keeps auth and social features out of the way.",
+                text = "Search repositories, inspect releases, and install APK assets with one tap.",
                 style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
                 color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatPill("Thin SDK")
-                StatPill("Local cache")
-                StatPill("Compose UI")
-            }
         }
-    }
-}
-
-@Composable
-private fun StatPill(text: String) {
-    Box(
-        modifier = Modifier
-            .clip(CircleShape)
-            .background(androidx.compose.material3.MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        Text(
-            text = text,
-            style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Medium,
-        )
     }
 }
 
 @Composable
 private fun RepositoryCard(
     repository: RepositorySummary,
-    onOpen: () -> Unit,
+    onClick: () -> Unit,
 ) {
     Card(
-        onClick = onOpen,
+        onClick = onClick,
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
             containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
         ),
     ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.Top,
         ) {
-            Text(
-                text = repository.fullName,
-                style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = repository.description ?: "No description provided.",
-                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
-                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(androidx.compose.material3.MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center,
             ) {
-                MetaChip("★ ${repository.stars.asCompactCount()}")
-                repository.language?.let { MetaChip(it) }
-                repository.updatedAt?.take(10)?.let { MetaChip("Updated $it") }
+                Icon(Icons.Rounded.Android, contentDescription = null)
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = repository.fullName,
+                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = repository.description ?: "No description provided.",
+                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MetaChip("★ ${repository.stars.asCompactCount()}")
+                    repository.language?.let { MetaChip(it) }
+                    repository.updatedAt?.take(10)?.let { MetaChip("Updated $it") }
+                }
             }
         }
     }
@@ -543,7 +545,7 @@ private fun RepositoryHeaderCard(
 private fun ReleaseCard(
     release: ReleaseSummary,
     activeDownloads: Map<Long, Float>,
-    onInstallAsset: (com.punkcrypto.releasehub.core.model.ReleaseAsset) -> Unit,
+    onInstallAsset: (ReleaseAsset) -> Unit,
 ) {
     Card(
         shape = RoundedCornerShape(24.dp),
@@ -559,7 +561,7 @@ private fun ReleaseCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = release.displayTitle,
                         style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
@@ -571,6 +573,7 @@ private fun ReleaseCard(
                         color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+
                 Column(horizontalAlignment = Alignment.End) {
                     if (release.isPreRelease) {
                         MetaChip("Pre-release")
@@ -599,13 +602,17 @@ private fun ReleaseCard(
                     if (index > 0) {
                         HorizontalDivider()
                     }
+
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
                                 Text(
                                     text = asset.name,
                                     style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
@@ -619,7 +626,9 @@ private fun ReleaseCard(
                                     color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
+
                             Spacer(Modifier.width(12.dp))
+
                             Button(onClick = { onInstallAsset(asset) }) {
                                 Icon(Icons.Rounded.CloudDownload, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
@@ -740,3 +749,20 @@ private fun EmptyState(
         )
     }
 }
+PY
+
+      - name: Commit and push
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Fix Compose UI source file"
+          git push
+
+
+This code changes the action not workable
