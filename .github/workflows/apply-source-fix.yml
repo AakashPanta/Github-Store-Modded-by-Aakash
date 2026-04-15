@@ -1,4 +1,4 @@
-name: Apply source compatibility fix
+name: Apply source fix
 
 on:
   workflow_dispatch:
@@ -21,25 +21,27 @@ jobs:
         shell: bash
         run: |
           set -e
-
           if [ -f "settings.gradle.kts" ]; then
             echo "dir=." >> "$GITHUB_OUTPUT"
           elif [ -f "releasehub-mvp/settings.gradle.kts" ]; then
             echo "dir=releasehub-mvp" >> "$GITHUB_OUTPUT"
           else
-            echo "Could not find project root."
+            echo "Project root not found"
             exit 1
           fi
 
-      - name: Apply source fixes
+      - name: Create source directories
         working-directory: ${{ steps.project.outputs.dir }}
         shell: bash
         run: |
           set -e
-
           mkdir -p sdk-github/src/androidMain/kotlin/com/punkcrypto/releasehub/sdk/github
           mkdir -p local-store/src/androidMain/kotlin/com/punkcrypto/releasehub/local/store
 
+      - name: Write AndroidGitHubHttpClient.kt
+        working-directory: ${{ steps.project.outputs.dir }}
+        shell: bash
+        run: |
           cat > sdk-github/src/androidMain/kotlin/com/punkcrypto/releasehub/sdk/github/AndroidGitHubHttpClient.kt <<'EOF'
 package com.punkcrypto.releasehub.sdk.github
 
@@ -59,7 +61,7 @@ fun createGitHubHttpClient(): HttpClient = HttpClient(OkHttp) {
             Json {
                 ignoreUnknownKeys = true
                 explicitNulls = false
-            },
+            }
         )
     }
 
@@ -77,6 +79,10 @@ fun createGitHubHttpClient(): HttpClient = HttpClient(OkHttp) {
 }
 EOF
 
+      - name: Write AndroidApkCacheStore.kt
+        working-directory: ${{ steps.project.outputs.dir }}
+        shell: bash
+        run: |
           cat > local-store/src/androidMain/kotlin/com/punkcrypto/releasehub/local/store/AndroidApkCacheStore.kt <<'EOF'
 package com.punkcrypto.releasehub.local.store
 
@@ -189,7 +195,7 @@ class AndroidApkCacheStore(
 
         upsert(cachedArtifact)
         onProgress(1f)
-        cachedArtifact
+        return@withContext cachedArtifact
     }
 
     private fun readIndex(): CacheIndex {
@@ -220,7 +226,7 @@ private data class CacheIndex(
 private fun String.sanitizeFileName(): String = replace(Regex("[^A-Za-z0-9._-]"), "_")
 EOF
 
-      - name: Commit and push fix
+      - name: Commit and push changes
         shell: bash
         run: |
           set -e
@@ -234,5 +240,5 @@ EOF
             exit 0
           fi
 
-          git commit -m "Fix Ktor source compatibility errors"
+          git commit -m "Apply source fix"
           git push
