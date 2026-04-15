@@ -252,7 +252,7 @@ private fun BrowseScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FilterChip(
-                selected = uiState.featuredOnly,
+                selected = false,
                 onClick = onRefreshFeatured,
                 label = { Text("Featured") },
             )
@@ -268,7 +268,7 @@ private fun BrowseScreen(
         Spacer(Modifier.size(16.dp))
 
         when {
-            uiState.isLoadingRepositories -> {
+            uiState.isLoadingBrowse -> {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
