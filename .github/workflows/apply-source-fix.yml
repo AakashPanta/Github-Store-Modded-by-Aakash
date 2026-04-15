@@ -12,15 +12,11 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v4
 
       - name: Detect project root
         id: project
-        shell: bash
         run: |
-          set -e
           if [ -f "settings.gradle.kts" ]; then
             echo "dir=." >> "$GITHUB_OUTPUT"
           elif [ -f "releasehub-mvp/settings.gradle.kts" ]; then
@@ -32,15 +28,12 @@ jobs:
 
       - name: Create source directories
         working-directory: ${{ steps.project.outputs.dir }}
-        shell: bash
         run: |
-          set -e
           mkdir -p sdk-github/src/androidMain/kotlin/com/punkcrypto/releasehub/sdk/github
           mkdir -p local-store/src/androidMain/kotlin/com/punkcrypto/releasehub/local/store
 
       - name: Write AndroidGitHubHttpClient.kt
         working-directory: ${{ steps.project.outputs.dir }}
-        shell: bash
         run: |
           cat > sdk-github/src/androidMain/kotlin/com/punkcrypto/releasehub/sdk/github/AndroidGitHubHttpClient.kt <<'EOF'
 package com.punkcrypto.releasehub.sdk.github
@@ -66,9 +59,9 @@ fun createGitHubHttpClient(): HttpClient = HttpClient(OkHttp) {
     }
 
     install(HttpTimeout) {
-        requestTimeoutMillis = 120_000
-        connectTimeoutMillis = 30_000
-        socketTimeoutMillis = 120_000
+        requestTimeoutMillis = 120000
+        connectTimeoutMillis = 30000
+        socketTimeoutMillis = 120000
     }
 
     defaultRequest {
@@ -81,7 +74,6 @@ EOF
 
       - name: Write AndroidApkCacheStore.kt
         working-directory: ${{ steps.project.outputs.dir }}
-        shell: bash
         run: |
           cat > local-store/src/androidMain/kotlin/com/punkcrypto/releasehub/local/store/AndroidApkCacheStore.kt <<'EOF'
 package com.punkcrypto.releasehub.local.store
@@ -152,7 +144,7 @@ class AndroidApkCacheStore(
                 releaseName = release.displayTitle,
                 absolutePath = targetFile.absolutePath,
                 sizeBytes = targetFile.length(),
-                downloadedAtEpochMillis = System.currentTimeMillis(),
+                downloadedAtEpochMillis = System.currentTimeMillis()
             )
             upsert(existing)
             return@withContext existing
@@ -190,7 +182,7 @@ class AndroidApkCacheStore(
             releaseName = release.displayTitle,
             absolutePath = targetFile.absolutePath,
             sizeBytes = targetFile.length(),
-            downloadedAtEpochMillis = System.currentTimeMillis(),
+            downloadedAtEpochMillis = System.currentTimeMillis()
         )
 
         upsert(cachedArtifact)
@@ -220,25 +212,20 @@ class AndroidApkCacheStore(
 
 @Serializable
 private data class CacheIndex(
-    val items: List<CachedArtifact> = emptyList(),
+    val items: List<CachedArtifact> = emptyList()
 )
 
 private fun String.sanitizeFileName(): String = replace(Regex("[^A-Za-z0-9._-]"), "_")
 EOF
 
       - name: Commit and push changes
-        shell: bash
         run: |
-          set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git add -A
-
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
           fi
-
           git commit -m "Apply source fix"
           git push
