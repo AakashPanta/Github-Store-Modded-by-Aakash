@@ -1,0 +1,73 @@
+name: Fix androidApp build.gradle.kts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-build-gradle:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Rewrite androidApp build file
+        shell: bash
+        run: |
+          cat > androidApp/build.gradle.kts <<'EOF'
+          plugins {
+              alias(libs.plugins.android.application)
+              alias(libs.plugins.kotlin.android)
+              alias(libs.plugins.compose.compiler)
+          }
+
+          android {
+              namespace = "com.punkcrypto.releasehub"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.punkcrypto.releasehub"
+                  minSdk = 26
+                  targetSdk = 35
+                  versionCode = 1
+                  versionName = "0.1.0"
+              }
+
+              buildFeatures {
+                  compose = true
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+
+          dependencies {
+              implementation(project(":composeApp"))
+              implementation(libs.androidx.activity.compose)
+              implementation(libs.androidx.core.ktx)
+              implementation(libs.kotlinx.coroutines.android)
+          }
+          EOF
+
+      - name: Commit changes
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add androidApp/build.gradle.kts
+          git commit -m "Fix androidApp Compose dependency wiring"
+          git push
