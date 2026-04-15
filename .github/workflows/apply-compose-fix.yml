@@ -37,8 +37,11 @@ jobs:
         run: |
           set -e
           mkdir -p composeApp/src/commonMain/kotlin/com/punkcrypto/releasehub/app
-          cp ../tools/fixes/ReleaseHubApp.fixed.kt composeApp/src/commonMain/kotlin/com/punkcrypto/releasehub/app/ReleaseHubApp.kt || \
-          cp tools/fixes/ReleaseHubApp.fixed.kt composeApp/src/commonMain/kotlin/com/punkcrypto/releasehub/app/ReleaseHubApp.kt
+          if [ -f ../tools/fixes/ReleaseHubApp.fixed.kt ]; then
+            cp ../tools/fixes/ReleaseHubApp.fixed.kt composeApp/src/commonMain/kotlin/com/punkcrypto/releasehub/app/ReleaseHubApp.kt
+          else
+            cp tools/fixes/ReleaseHubApp.fixed.kt composeApp/src/commonMain/kotlin/com/punkcrypto/releasehub/app/ReleaseHubApp.kt
+          fi
 
       - name: Commit and push
         run: |
