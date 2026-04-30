@@ -7,34 +7,50 @@ permissions:
   contents: write
 
 jobs:
-  fix-gradle:
+  fix-gradle-build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.PAT_TOKEN || github.token }}
 
-      - name: Fix Gradle plugin versions
+      - name: Fix invalid Gradle plugin versions
         shell: bash
         run: |
           set -e
 
-          echo "Fixing invalid Gradle/Kotlin/Compose versions..."
+          echo "Fixing Gradle, Kotlin, and Compose plugin versions..."
 
           find . -name "*.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
-            sed -i 's/version "8\.9\.0"/version "8.5.2"/g' "$file"
-            sed -i 's/version("8\.9\.0")/version("8.5.2")/g' "$file"
+            echo "Checking $file"
 
-            sed -i 's/version "2\.1\.0"/version "1.9.24"/g' "$file"
-            sed -i 's/version("2\.1\.0")/version("1.9.24")/g' "$file"
+            sed -i 's/id("com.android.application") version "8\.9\.0"/id("com.android.application") version "8.5.2"/g' "$file"
+            sed -i 's/id("com.android.library") version "8\.9\.0"/id("com.android.library") version "8.5.2"/g' "$file"
 
-            sed -i 's/version "1\.8\.0"/version "1.6.11"/g' "$file"
-            sed -i 's/version("1\.8\.0")/version("1.6.11")/g' "$file"
+            sed -i 's/id("org.jetbrains.kotlin.android") version "2\.1\.0"/id("org.jetbrains.kotlin.android") version "1.9.24"/g' "$file"
+            sed -i 's/id("org.jetbrains.kotlin.multiplatform") version "2\.1\.0"/id("org.jetbrains.kotlin.multiplatform") version "1.9.24"/g' "$file"
+            sed -i 's/id("org.jetbrains.kotlin.plugin.serialization") version "2\.1\.0"/id("org.jetbrains.kotlin.plugin.serialization") version "1.9.24"/g' "$file"
+
+            sed -i 's/id("org.jetbrains.compose") version "1\.8\.0"/id("org.jetbrains.compose") version "1.6.11"/g' "$file"
+            sed -i 's/id("org.jetbrains.kotlin.plugin.compose") version "2\.1\.0"/id("org.jetbrains.kotlin.plugin.compose") version "1.9.24"/g' "$file"
           done
 
-      - name: Fix Gradle wrapper version
+      - name: Fix version catalog if present
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f gradle/libs.versions.toml ]; then
+            echo "Fixing gradle/libs.versions.toml"
+
+            sed -i 's/agp = "8\.9\.0"/agp = "8.5.2"/g' gradle/libs.versions.toml
+            sed -i 's/androidGradlePlugin = "8\.9\.0"/androidGradlePlugin = "8.5.2"/g' gradle/libs.versions.toml
+
+            sed -i 's/kotlin = "2\.1\.0"/kotlin = "1.9.24"/g' gradle/libs.versions.toml
+            sed -i 's/compose = "1\.8\.0"/compose = "1.6.11"/g' gradle/libs.versions.toml
+          fi
+
+      - name: Fix Gradle wrapper
         shell: bash
         run: |
           set -e
@@ -43,37 +59,7 @@ jobs:
             sed -i 's#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-bin.zip#g' gradle/wrapper/gradle-wrapper.properties
           fi
 
-      - name: Ensure plugin repositories exist
-        shell: bash
-        run: |
-          set -e
-
-          if [ -f settings.gradle.kts ]; then
-            if ! grep -q "gradlePluginPortal()" settings.gradle.kts; then
-              python3 <<'PY'
-from pathlib import Path
-
-p = Path("settings.gradle.kts")
-text = p.read_text()
-
-if "pluginManagement" not in text:
-    block = """pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
-
-"""
-    text = block + text
-
-p.write_text(text)
-PY
-            fi
-          fi
-
-      - name: Commit fixed Gradle config
+      - name: Commit and push fixes
         shell: bash
         run: |
           set -e
@@ -82,9 +68,9 @@ PY
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           if git diff --quiet; then
-            echo "No changes needed."
+            echo "No Gradle version fixes needed."
           else
             git add .
-            git commit -m "Fix Gradle Android build versions"
+            git commit -m "Fix Gradle build configuration"
             git push
           fi
