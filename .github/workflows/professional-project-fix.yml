@@ -7,171 +7,176 @@ permissions:
   contents: write
 
 jobs:
-  fix-project:
+  professional-project-fix:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Professional Gradle/KMP/Android stabilization
+      - name: Fix entire project professionally
         shell: bash
         run: |
           set -e
 
-          echo "Fixing project professionally..."
+          python3 <<'PY'
+          from pathlib import Path
+          import re
 
-          # 1. Remove broken Compose compiler alias/plugin usage
-          find . -name "*.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
-            sed -i '/alias(libs.plugins.compose.compiler)/d' "$file"
-            sed -i '/libs.plugins.compose.compiler/d' "$file"
-            sed -i '/org.jetbrains.kotlin.plugin.compose/d' "$file"
-          done
+          root = Path(".")
 
-          if [ -f gradle/libs.versions.toml ]; then
-            sed -i '/compose-compiler/d' gradle/libs.versions.toml
-            sed -i '/composeCompiler/d' gradle/libs.versions.toml
-            sed -i '/kotlin-compose/d' gradle/libs.versions.toml
-            sed -i '/kotlinCompose/d' gradle/libs.versions.toml
-            sed -i '/org.jetbrains.kotlin.plugin.compose/d' gradle/libs.versions.toml
-          fi
+          def read(p):
+              return p.read_text(encoding="utf-8")
 
-          # 2. Add androidTarget() to every KMP Android module missing it
-          find . -name "build.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
-            if grep -q 'kotlin("multiplatform")\|id("org.jetbrains.kotlin.multiplatform")\|alias(libs.plugins.kotlin.multiplatform)' "$file" && \
-               grep -q 'com.android.library\|com.android.application\|libs.plugins.android' "$file" && \
-               ! grep -q 'androidTarget()' "$file"; then
+          def write(p, text):
+              p.write_text(text, encoding="utf-8")
 
-              echo "Adding androidTarget() to $file"
+          def insert_inside_block(text, block_name, insertion):
+              idx = text.find(block_name + " {")
+              if idx == -1:
+                  return text
 
-              python3 <<PY
-from pathlib import Path
+              brace = text.find("{", idx)
+              if brace == -1:
+                  return text
 
-p = Path("$file")
-text = p.read_text()
+              return text[:brace + 1] + "\n" + insertion + text[brace + 1:]
 
-idx = text.find("kotlin {")
-if idx != -1:
-    brace = text.find("{", idx)
-    insert_at = brace + 1
-    text = text[:insert_at] + "\\n    androidTarget()\\n" + text[insert_at:]
+          def append_inside_android_block(text, insertion):
+              idx = text.find("android {")
+              if idx == -1:
+                  return text
 
-p.write_text(text)
-PY
-            fi
-          done
+              brace = text.find("{", idx)
+              depth = 0
+              end = -1
 
-          # 3. Add safe Android namespace where missing
-          find . -path "*/build.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
-            if grep -q 'android {' "$file" && ! grep -q 'namespace =' "$file"; then
-              module_name=$(basename "$(dirname "$file")" | tr '-' '_' | tr '[:upper:]' '[:lower:]')
-              namespace="com.mrrobot.releasehub.${module_name}"
+              for i in range(brace, len(text)):
+                  if text[i] == "{":
+                      depth += 1
+                  elif text[i] == "}":
+                      depth -= 1
+                      if depth == 0:
+                          end = i
+                          break
 
-              echo "Adding namespace $namespace to $file"
+              if end == -1:
+                  return text
 
-              python3 <<PY
-from pathlib import Path
+              return text[:end] + "\n" + insertion + "\n" + text[end:]
 
-p = Path("$file")
-text = p.read_text()
-namespace = "$namespace"
+          gradle_files = list(root.rglob("*.gradle.kts"))
 
-idx = text.find("android {")
-if idx != -1:
-    brace = text.find("{", idx)
-    insert_at = brace + 1
-    text = text[:insert_at] + f'\\n    namespace = "{namespace}"\\n' + text[insert_at:]
+          for p in gradle_files:
+              text = read(p)
 
-p.write_text(text)
-PY
-            fi
-          done
+              # Remove invalid Compose compiler alias/plugin references
+              lines = []
+              for line in text.splitlines():
+                  if "libs.plugins.compose.compiler" in line:
+                      continue
+                  if "org.jetbrains.kotlin.plugin.compose" in line:
+                      continue
+                  if "compose.compiler" in line:
+                      continue
+                  lines.append(line)
+              text = "\n".join(lines) + "\n"
 
-          # 4. Normalize Android SDK levels where missing
-          find . -path "*/build.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
-            if grep -q 'android {' "$file"; then
-              if ! grep -q 'compileSdk' "$file"; then
-                python3 <<PY
-from pathlib import Path
+              # Add androidTarget() to KMP Android modules
+              is_kmp = (
+                  'kotlin("multiplatform")' in text
+                  or 'id("org.jetbrains.kotlin.multiplatform")' in text
+                  or "libs.plugins.kotlin.multiplatform" in text
+              )
 
-p = Path("$file")
-text = p.read_text()
-idx = text.find("android {")
-brace = text.find("{", idx)
-text = text[:brace+1] + "\\n    compileSdk = 35\\n" + text[brace+1:]
-p.write_text(text)
-PY
-              fi
+              has_android_plugin = (
+                  'com.android.library' in text
+                  or 'com.android.application' in text
+                  or 'libs.plugins.android.library' in text
+                  or 'libs.plugins.android.application' in text
+              )
 
-              if grep -q 'defaultConfig {' "$file" && ! grep -q 'minSdk' "$file"; then
-                python3 <<PY
-from pathlib import Path
+              if is_kmp and has_android_plugin and "androidTarget()" not in text:
+                  text = insert_inside_block(text, "kotlin", "    androidTarget()")
 
-p = Path("$file")
-text = p.read_text()
-idx = text.find("defaultConfig {")
-brace = text.find("{", idx)
-text = text[:brace+1] + "\\n        minSdk = 24\\n" + text[brace+1:]
-p.write_text(text)
-PY
-              fi
-            fi
-          done
+              # Add namespace if missing
+              if "android {" in text and "namespace =" not in text:
+                  module = p.parent.name.replace("-", "_").lower()
+                  namespace = f"com.mrrobot.releasehub.{module}"
+                  text = insert_inside_block(text, "android", f'    namespace = "{namespace}"')
 
-          # 5. Add Java 17 compile options where missing
-          find . -path "*/build.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
-            if grep -q 'android {' "$file" && ! grep -q 'sourceCompatibility = JavaVersion.VERSION_17' "$file"; then
-              python3 <<PY
-from pathlib import Path
+              # Add compileSdk if missing
+              if "android {" in text and "compileSdk" not in text:
+                  text = insert_inside_block(text, "android", "    compileSdk = 35")
 
-p = Path("$file")
-text = p.read_text()
+              # Add minSdk if defaultConfig exists but minSdk missing
+              if "defaultConfig {" in text and "minSdk" not in text:
+                  text = insert_inside_block(text, "defaultConfig", "        minSdk = 24")
 
-block = '''
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-'''
+              # Add Java 17 compile options if missing
+              if "android {" in text and "sourceCompatibility = JavaVersion.VERSION_17" not in text:
+                  compile_options = """    compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }"""
+                  text = append_inside_android_block(text, compile_options)
 
-android_idx = text.find("android {")
-if android_idx != -1:
-    depth = 0
-    end = None
-    for i in range(android_idx, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-    if end:
-        text = text[:end] + block + "\\n" + text[end:]
+              write(p, text)
 
-p.write_text(text)
-PY
-            fi
-          done
+          # Fix androidApp broken Compose dependency accessors
+          android_app = Path("androidApp/build.gradle.kts")
+          if android_app.exists():
+              text = read(android_app)
+              replacements = {
+                  "implementation(compose.ui)": 'implementation("androidx.compose.ui:ui")',
+                  "implementation(compose.material3)": 'implementation("androidx.compose.material3:material3")',
+                  "implementation(compose.foundation)": 'implementation("androidx.compose.foundation:foundation")',
+                  "implementation(compose.runtime)": 'implementation("androidx.compose.runtime:runtime")',
+              }
+              for old, new in replacements.items():
+                  text = text.replace(old, new)
+              write(android_app, text)
 
-          # 6. Stabilize gradle.properties
-          touch gradle.properties
+          # Clean libs.versions.toml
+          toml = Path("gradle/libs.versions.toml")
+          if toml.exists():
+              text = read(toml)
+              cleaned = []
+              for line in text.splitlines():
+                  bad = (
+                      "compose-compiler" in line
+                      or "composeCompiler" in line
+                      or "kotlin-compose" in line
+                      or "kotlinCompose" in line
+                      or "org.jetbrains.kotlin.plugin.compose" in line
+                  )
+                  if not bad:
+                      cleaned.append(line)
+              write(toml, "\n".join(cleaned) + "\n")
 
-          grep -q '^org.gradle.jvmargs=' gradle.properties || echo 'org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8' >> gradle.properties
-          grep -q '^kotlin.code.style=' gradle.properties || echo 'kotlin.code.style=official' >> gradle.properties
-          grep -q '^android.useAndroidX=' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
-          grep -q '^kotlin.mpp.androidSourceSetLayoutVersion=' gradle.properties || echo 'kotlin.mpp.androidSourceSetLayoutVersion=2' >> gradle.properties
-          grep -q '^kotlin.mpp.androidGradlePluginCompatibility.nowarn=' gradle.properties || echo 'kotlin.mpp.androidGradlePluginCompatibility.nowarn=true' >> gradle.properties
+          # Stabilize gradle.properties
+          props = Path("gradle.properties")
+          existing = read(props) if props.exists() else ""
 
-          # 7. Fix direct compose.* dependency accessors in androidApp
-          if [ -f androidApp/build.gradle.kts ]; then
-            sed -i 's/implementation(compose\.ui)/implementation("androidx.compose.ui:ui")/g' androidApp/build.gradle.kts
-            sed -i 's/implementation(compose\.material3)/implementation("androidx.compose.material3:material3")/g' androidApp/build.gradle.kts
-            sed -i 's/implementation(compose\.foundation)/implementation("androidx.compose.foundation:foundation")/g' androidApp/build.gradle.kts
-            sed -i 's/implementation(compose\.runtime)/implementation("androidx.compose.runtime:runtime")/g' androidApp/build.gradle.kts
-          fi
+          required = {
+              "org.gradle.jvmargs": "-Xmx4g -Dfile.encoding=UTF-8",
+              "kotlin.code.style": "official",
+              "android.useAndroidX": "true",
+              "kotlin.mpp.androidSourceSetLayoutVersion": "2",
+              "kotlin.mpp.androidGradlePluginCompatibility.nowarn": "true",
+          }
 
-      - name: Commit professional fixes
+          lines = existing.splitlines()
+          keys = {line.split("=", 1)[0].strip() for line in lines if "=" in line}
+
+          for key, value in required.items():
+              if key not in keys:
+                  lines.append(f"{key}={value}")
+
+          write(props, "\n".join(lines).strip() + "\n")
+          PY
+
+      - name: Commit and push professional fixes
         shell: bash
         run: |
           set -e
@@ -183,6 +188,6 @@ PY
             echo "No changes needed."
           else
             git add .
-            git commit -m "Professionally stabilize Android KMP build"
+            git commit -m "Professionally stabilize Android KMP project"
             git push
           fi
