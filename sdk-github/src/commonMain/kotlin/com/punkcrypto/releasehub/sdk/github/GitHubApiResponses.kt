@@ -4,9 +4,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class GitHubRepositorySearchResponse(
+internal data class GitHubRepositorySearchResponse(
     @SerialName("items")
     val items: List<RepositoryDto> = emptyList()
 )
 
-typealias GitHubReleaseDto = ReleaseDto
+internal typealias GitHubReleaseDto = ReleaseDto
