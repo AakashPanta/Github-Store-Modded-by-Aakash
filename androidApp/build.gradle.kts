@@ -31,8 +31,8 @@ android {
 
 dependencies {
     implementation(project(":composeApp"))
-    implementation(compose.ui)
-    implementation(compose.material3)
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material3:material3")
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
