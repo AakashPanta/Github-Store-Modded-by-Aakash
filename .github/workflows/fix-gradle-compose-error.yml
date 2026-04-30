@@ -1,0 +1,40 @@
+name: Auto Fix Gradle Compose Error
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Fix invalid Compose compiler alias
+        run: |
+          echo "Fixing Compose compiler alias issue..."
+
+          # Remove broken alias from all gradle files
+          find . -name "*.gradle.kts" -type f -exec sed -i '/compose.compiler/d' {} +
+
+          # Clean TOML if exists
+          if [ -f gradle/libs.versions.toml ]; then
+            sed -i '/compose-compiler/d' gradle/libs.versions.toml
+          fi
+
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          if git diff --quiet; then
+            echo "No changes"
+          else
+            git add .
+            git commit -m "Fix: removed invalid compose compiler alias"
+            git push
+          fi
