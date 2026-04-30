@@ -1,0 +1,48 @@
+name: Fix AndroidApp Compose Dependencies
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-androidapp-compose-deps:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Replace broken compose accessors
+        shell: bash
+        run: |
+          set -e
+
+          FILE="androidApp/build.gradle.kts"
+
+          if [ ! -f "$FILE" ]; then
+            echo "androidApp/build.gradle.kts not found"
+            exit 1
+          fi
+
+          sed -i 's/implementation(compose\.ui)/implementation("androidx.compose.ui:ui")/g' "$FILE"
+          sed -i 's/implementation(compose\.material3)/implementation("androidx.compose.material3:material3")/g' "$FILE"
+          sed -i 's/implementation(compose\.foundation)/implementation("androidx.compose.foundation:foundation")/g' "$FILE"
+          sed -i 's/implementation(compose\.runtime)/implementation("androidx.compose.runtime:runtime")/g' "$FILE"
+
+      - name: Commit and push fix
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes needed."
+          else
+            git add androidApp/build.gradle.kts
+            git commit -m "Fix Android app Compose dependencies"
+            git push
+          fi
