@@ -1,141 +1,163 @@
-name: Build APK Stable
+name: Build APK Emergency Stable
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Make Gradle executable
+        shell: bash
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+          fi
 
-      - name: Repair project
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Repair project files
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Fix Kotlin version..."
-          find . -name "*.gradle.kts" -type f -exec sed -i 's/1\.9\.24/2.0.20/g' {} \;
-          find . -name "*.toml" -type f -exec sed -i 's/1\.9\.24/2.0.20/g' {} \;
-
-          echo "Fix gradle.properties..."
-          touch gradle.properties
-          grep -q '^android.useAndroidX=' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
-          grep -q '^kotlin.code.style=' gradle.properties || echo 'kotlin.code.style=official' >> gradle.properties
-          grep -q '^kotlin.mpp.androidSourceSetLayoutVersion=' gradle.properties || echo 'kotlin.mpp.androidSourceSetLayoutVersion=2' >> gradle.properties
-          grep -q '^kotlin.mpp.androidGradlePluginCompatibility.nowarn=' gradle.properties || echo 'kotlin.mpp.androidGradlePluginCompatibility.nowarn=true' >> gradle.properties
-          grep -q '^android.suppressUnsupportedCompileSdk=' gradle.properties || echo 'android.suppressUnsupportedCompileSdk=35' >> gradle.properties
-
-          echo "Patch Gradle files safely..."
           python3 <<'PY'
-from pathlib import Path
+          from pathlib import Path
+          import re
 
-def add_after_plugins(path, line):
-    p = Path(path)
-    if not p.exists():
-        return
-    text = p.read_text()
-    if line in text:
-        return
-    text = text.replace("plugins {", "plugins {\n    " + line, 1)
-    p.write_text(text)
+          def read(path):
+              p = Path(path)
+              return p.read_text() if p.exists() else ""
 
-add_after_plugins("build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false')
-add_after_plugins("androidApp/build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose")')
-add_after_plugins("composeApp/build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose")')
+          def write(path, text):
+              p = Path(path)
+              p.parent.mkdir(parents=True, exist_ok=True)
+              p.write_text(text)
 
-p = Path("composeApp/build.gradle.kts")
-if p.exists():
-    text = p.read_text()
-    if "kotlin {" in text and "androidTarget()" not in text:
-        text = text.replace("kotlin {", "kotlin {\n    androidTarget()", 1)
-        p.write_text(text)
+          # Fix Kotlin versions
+          for p in list(Path(".").rglob("*.gradle.kts")) + list(Path(".").rglob("*.toml")):
+              text = p.read_text()
+              text = text.replace("1.9.24", "2.0.20")
+              p.write_text(text)
 
-p = Path("androidApp/build.gradle.kts")
-if p.exists():
-    text = p.read_text()
-    if "dependencies {" not in text:
-        text += "\n\ndependencies {\n}\n"
-    deps = [
-        'implementation(project(":composeApp"))',
-        'implementation(project(":core-model"))',
-        'implementation(project(":local-store"))',
-        'implementation(project(":sdk-github"))',
-    ]
-    for dep in deps:
-        if dep not in text:
-            text = text.replace("dependencies {", "dependencies {\n    " + dep, 1)
-    p.write_text(text)
-PY
+          # gradle.properties
+          props = Path("gradle.properties")
+          lines = props.read_text().splitlines() if props.exists() else []
+          required = {
+              "android.useAndroidX": "true",
+              "kotlin.code.style": "official",
+              "kotlin.mpp.androidSourceSetLayoutVersion": "2",
+              "kotlin.mpp.androidGradlePluginCompatibility.nowarn": "true",
+              "android.suppressUnsupportedCompileSdk": "35",
+          }
+          existing = {line.split("=", 1)[0].strip() for line in lines if "=" in line}
+          for k, v in required.items():
+              if k not in existing:
+                  lines.append(f"{k}={v}")
+          props.write_text("\n".join(lines) + "\n")
 
-          echo "Fix GitHub HTTP client..."
-          SDK_DIR="sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github"
-          mkdir -p "$SDK_DIR"
+          def add_plugin(path, plugin_line):
+              text = read(path)
+              if not text or plugin_line in text:
+                  return
+              if "plugins {" in text:
+                  text = text.replace("plugins {", "plugins {\n    " + plugin_line, 1)
+                  write(path, text)
 
-          find sdk-github/src -type f -name "*.kt" \
-            ! -path "$SDK_DIR/GitHubHttpClientFactory.kt" \
-            -exec grep -l "fun createGitHubHttpClient" {} \; | while read -r file; do
-              rm -f "$file"
-          done
+          add_plugin("build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false')
+          add_plugin("androidApp/build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose")')
+          add_plugin("composeApp/build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose")')
 
-          cat > "$SDK_DIR/GitHubHttpClientFactory.kt" <<'EOF'
-package com.punkcrypto.releasehub.sdk.github
+          # Add androidTarget to composeApp
+          text = read("composeApp/build.gradle.kts")
+          if text and "kotlin {" in text and "androidTarget()" not in text:
+              text = text.replace("kotlin {", "kotlin {\n    androidTarget()", 1)
+              write("composeApp/build.gradle.kts", text)
 
-import io.ktor.client.HttpClient
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.defaultRequest
-import io.ktor.client.request.header
-import io.ktor.http.HttpHeaders
-import io.ktor.serialization.kotlinx.json.json
-import kotlinx.serialization.json.Json
+          # Add androidApp dependencies
+          text = read("androidApp/build.gradle.kts")
+          if text:
+              if "dependencies {" not in text:
+                  text += "\n\ndependencies {\n}\n"
+              deps = [
+                  'implementation(project(":composeApp"))',
+                  'implementation(project(":core-model"))',
+                  'implementation(project(":local-store"))',
+                  'implementation(project(":sdk-github"))',
+              ]
+              for dep in deps:
+                  if dep not in text:
+                      text = text.replace("dependencies {", "dependencies {\n    " + dep, 1)
+              write("androidApp/build.gradle.kts", text)
 
-fun createGitHubHttpClient(): HttpClient {
-    return HttpClient {
-        install(ContentNegotiation) {
-            json(
-                Json {
-                    ignoreUnknownKeys = true
-                    isLenient = true
-                    explicitNulls = false
-                }
-            )
-        }
+          # Fix duplicate GitHub HTTP client
+          sdk_dir = Path("sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github")
+          sdk_dir.mkdir(parents=True, exist_ok=True)
 
-        defaultRequest {
-            header(HttpHeaders.Accept, "application/vnd.github+json")
-            header("X-GitHub-Api-Version", "2022-11-28")
-            header(HttpHeaders.UserAgent, "ReleaseHubMvp")
-        }
-    }
-}
-EOF
+          for file in Path("sdk-github/src").rglob("*.kt"):
+              if file.name != "GitHubHttpClientFactory.kt":
+                  content = file.read_text()
+                  if "fun createGitHubHttpClient" in content:
+                      file.unlink()
 
-      - name: Show important files
-        shell: bash
-        run: |
-          sed -n '1,160p' build.gradle.kts || true
-          sed -n '1,200p' androidApp/build.gradle.kts || true
-          sed -n '1,200p' composeApp/build.gradle.kts || true
-          grep -R "fun createGitHubHttpClient" sdk-github/src || true
+          write(sdk_dir / "GitHubHttpClientFactory.kt", '''package com.punkcrypto.releasehub.sdk.github
+
+          import io.ktor.client.HttpClient
+          import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+          import io.ktor.client.plugins.defaultRequest
+          import io.ktor.client.request.header
+          import io.ktor.http.HttpHeaders
+          import io.ktor.serialization.kotlinx.json.json
+          import kotlinx.serialization.json.Json
+
+          fun createGitHubHttpClient(): HttpClient {
+              return HttpClient {
+                  install(ContentNegotiation) {
+                      json(
+                          Json {
+                              ignoreUnknownKeys = true
+                              isLenient = true
+                              explicitNulls = false
+                          }
+                      )
+                  }
+
+                  defaultRequest {
+                      header(HttpHeaders.Accept, "application/vnd.github+json")
+                      header("X-GitHub-Api-Version", "2022-11-28")
+                      header(HttpHeaders.UserAgent, "ReleaseHubMvp")
+                  }
+              }
+          }
+          '''.replace("          ", ""))
+          PY
 
       - name: Build APK
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew clean :androidApp:assembleDebug --stacktrace || gradle clean :androidApp:assembleDebug --stacktrace
+          if [ -f ./gradlew ]; then
+            ./gradlew clean :androidApp:assembleDebug --stacktrace
+          else
+            gradle clean :androidApp:assembleDebug --stacktrace
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
