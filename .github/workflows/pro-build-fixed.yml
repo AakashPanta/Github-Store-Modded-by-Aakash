@@ -33,86 +33,84 @@ jobs:
 
           echo "Fixing Kotlin, Compose, and KMP Android target..."
 
-          cat > /tmp/fix_project.py <<'PY'
-          from pathlib import Path
-          import re
+          python3 - <<'PY'
+from pathlib import Path
+import re
 
-          files = list(Path(".").rglob("*.gradle.kts")) + list(Path(".").rglob("*.toml"))
+files = list(Path(".").rglob("*.gradle.kts")) + list(Path(".").rglob("*.toml"))
 
-          for path in files:
-              text = path.read_text(encoding="utf-8")
+for path in files:
+    text = path.read_text(encoding="utf-8")
 
-              text = re.sub(r'kotlin\s*=\s*"[^"]+"', 'kotlin = "2.0.20"', text)
-              text = re.sub(r'kotlinVersion\s*=\s*"[^"]+"', 'kotlinVersion = "2.0.20"', text)
-              text = text.replace('version "1.9.24"', 'version "2.0.20"')
-              text = text.replace('version("1.9.24")', 'version("2.0.20")')
-              text = text.replace('version = "1.9.24"', 'version = "2.0.20"')
+    # Compose 1.8.0 requires Kotlin Gradle Plugin 2.0.0+
+    text = re.sub(r'kotlin\s*=\s*"[^"]+"', 'kotlin = "2.0.20"', text)
+    text = re.sub(r'kotlinVersion\s*=\s*"[^"]+"', 'kotlinVersion = "2.0.20"', text)
+    text = text.replace('version "1.9.24"', 'version "2.0.20"')
+    text = text.replace('version("1.9.24")', 'version("2.0.20")')
+    text = text.replace('version = "1.9.24"', 'version = "2.0.20"')
 
-              lines = []
-              for line in text.splitlines():
-                  if "libs.plugins.compose.compiler" in line:
-                      continue
-                  if "alias(libs.plugins.compose.compiler)" in line:
-                      continue
-                  lines.append(line)
+    lines = []
+    for line in text.splitlines():
+        if "libs.plugins.compose.compiler" in line:
+            continue
+        if "alias(libs.plugins.compose.compiler)" in line:
+            continue
+        lines.append(line)
 
-              path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
-          for path in Path(".").rglob("build.gradle.kts"):
-              text = path.read_text(encoding="utf-8")
+for path in Path(".").rglob("build.gradle.kts"):
+    text = path.read_text(encoding="utf-8")
 
-              is_kmp = (
-                  'kotlin("multiplatform")' in text
-                  or 'id("org.jetbrains.kotlin.multiplatform")' in text
-                  or "libs.plugins.kotlin.multiplatform" in text
-              )
+    is_kmp = (
+        'kotlin("multiplatform")' in text
+        or 'id("org.jetbrains.kotlin.multiplatform")' in text
+        or "libs.plugins.kotlin.multiplatform" in text
+    )
 
-              has_android = (
-                  'com.android.library' in text
-                  or 'com.android.application' in text
-                  or "libs.plugins.android.library" in text
-                  or "libs.plugins.android.application" in text
-              )
+    has_android = (
+        'com.android.library' in text
+        or 'com.android.application' in text
+        or "libs.plugins.android.library" in text
+        or "libs.plugins.android.application" in text
+    )
 
-              if is_kmp and has_android and "androidTarget()" not in text:
-                  text = text.replace("kotlin {", "kotlin {\n    androidTarget()", 1)
-                  path.write_text(text, encoding="utf-8")
-                  print(f"Added androidTarget() to {path}")
+    if is_kmp and has_android and "androidTarget()" not in text:
+        text = text.replace("kotlin {", "kotlin {\n    androidTarget()", 1)
+        path.write_text(text, encoding="utf-8")
+        print(f"Added androidTarget() to {path}")
 
-          props = Path("gradle.properties")
-          existing = props.read_text(encoding="utf-8") if props.exists() else ""
+props = Path("gradle.properties")
+existing = props.read_text(encoding="utf-8") if props.exists() else ""
 
-          required = {
-              "android.useAndroidX": "true",
-              "kotlin.code.style": "official",
-              "kotlin.mpp.androidSourceSetLayoutVersion": "2",
-              "kotlin.mpp.androidGradlePluginCompatibility.nowarn": "true",
-          }
+required = {
+    "android.useAndroidX": "true",
+    "kotlin.code.style": "official",
+    "kotlin.mpp.androidSourceSetLayoutVersion": "2",
+    "kotlin.mpp.androidGradlePluginCompatibility.nowarn": "true",
+}
 
-          lines = existing.splitlines()
-          keys = {line.split("=", 1)[0].strip() for line in lines if "=" in line}
+lines = existing.splitlines()
+keys = {line.split("=", 1)[0].strip() for line in lines if "=" in line}
 
-          for key, value in required.items():
-              if key not in keys:
-                  lines.append(f"{key}={value}")
+for key, value in required.items():
+    if key not in keys:
+        lines.append(f"{key}={value}")
 
-          props.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-          PY
-
-          sed -i 's/^          //' /tmp/fix_project.py
-          python3 /tmp/fix_project.py
+props.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+PY
 
       - name: Show fixed Gradle files
         shell: bash
         run: |
           echo "===== root build.gradle.kts ====="
-          sed -n '1,80p' build.gradle.kts || true
+          sed -n '1,100p' build.gradle.kts || true
 
           echo "===== composeApp/build.gradle.kts ====="
-          sed -n '1,120p' composeApp/build.gradle.kts || true
+          sed -n '1,140p' composeApp/build.gradle.kts || true
 
           echo "===== gradle/libs.versions.toml ====="
-          sed -n '1,120p' gradle/libs.versions.toml || true
+          sed -n '1,140p' gradle/libs.versions.toml || true
 
       - name: Clean build
         run: gradle clean --stacktrace
