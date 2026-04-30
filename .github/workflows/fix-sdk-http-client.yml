@@ -1,0 +1,63 @@
+name: Fix SDK HTTP Client
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore missing GitHub HTTP client
+        run: |
+          SDK_DIR="sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github"
+          mkdir -p "$SDK_DIR"
+
+          printf '%s\n' \
+          'package com.punkcrypto.releasehub.sdk.github' \
+          '' \
+          'import io.ktor.client.HttpClient' \
+          'import io.ktor.client.plugins.contentnegotiation.ContentNegotiation' \
+          'import io.ktor.client.plugins.defaultRequest' \
+          'import io.ktor.client.request.header' \
+          'import io.ktor.http.HttpHeaders' \
+          'import io.ktor.serialization.kotlinx.json.json' \
+          'import kotlinx.serialization.json.Json' \
+          '' \
+          'internal fun createGitHubHttpClient(): HttpClient {' \
+          '    return HttpClient {' \
+          '        install(ContentNegotiation) {' \
+          '            json(Json { ignoreUnknownKeys = true })' \
+          '        }' \
+          '        defaultRequest {' \
+          '            header(HttpHeaders.Accept, "application/vnd.github+json")' \
+          '            header("X-GitHub-Api-Version", "2022-11-28")' \
+          '            header(HttpHeaders.UserAgent, "ReleaseHubMvp")' \
+          '        }' \
+          '    }' \
+          '}' \
+          > "$SDK_DIR/GitHubHttpClientFactory.kt"
+
+          if [ -f "$SDK_DIR/GitHubApiResponses.kt" ]; then
+            sed -i 's/^data class GitHubRepositorySearchResponse/internal data class GitHubRepositorySearchResponse/' "$SDK_DIR/GitHubApiResponses.kt"
+            sed -i 's/^typealias GitHubReleaseDto/internal typealias GitHubReleaseDto/' "$SDK_DIR/GitHubApiResponses.kt"
+          fi
+
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github
+
+          if git diff --cached --quiet; then
+            echo "No changes needed."
+          else
+            git commit -m "Restore internal GitHub HTTP client"
+            git push
+          fi
