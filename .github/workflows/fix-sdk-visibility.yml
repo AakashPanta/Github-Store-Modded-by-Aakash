@@ -1,0 +1,41 @@
+name: Fix SDK Visibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fix SDK visibility and duplicate client
+        run: |
+          SDK_DIR="sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github"
+
+          # Remove duplicate client factory we added earlier
+          rm -f "$SDK_DIR/GitHubHttpClientFactory.kt"
+
+          # Make response types internal so they can use internal DTOs
+          if [ -f "$SDK_DIR/GitHubApiResponses.kt" ]; then
+            sed -i 's/^data class GitHubRepositorySearchResponse/internal data class GitHubRepositorySearchResponse/' "$SDK_DIR/GitHubApiResponses.kt"
+            sed -i 's/^typealias GitHubReleaseDto/internal typealias GitHubReleaseDto/' "$SDK_DIR/GitHubApiResponses.kt"
+          fi
+
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github
+
+          if git diff --cached --quiet; then
+            echo "No changes needed."
+          else
+            git commit -m "Fix SDK DTO visibility and duplicate client"
+            git push
+          fi
