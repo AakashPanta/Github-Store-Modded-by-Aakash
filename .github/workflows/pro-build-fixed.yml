@@ -1,4 +1,4 @@
-name: Build APK Professional Stable
+name: Build APK Stable
 
 on:
   workflow_dispatch:
@@ -11,85 +11,83 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
 
-      - name: Fix Kotlin Compose versions
+      - name: Repair project
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "Fix Kotlin version..."
           find . -name "*.gradle.kts" -type f -exec sed -i 's/1\.9\.24/2.0.20/g' {} \;
           find . -name "*.toml" -type f -exec sed -i 's/1\.9\.24/2.0.20/g' {} \;
 
-      - name: Add Compose Compiler and KMP Android target
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ROOT_FILE="build.gradle.kts"
-          ANDROID_FILE="androidApp/build.gradle.kts"
-          COMPOSE_FILE="composeApp/build.gradle.kts"
-
-          if [ -f "$ROOT_FILE" ]; then
-            if ! grep -q 'org.jetbrains.kotlin.plugin.compose' "$ROOT_FILE"; then
-              sed -i '/plugins {/a\    id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false' "$ROOT_FILE"
-            fi
-          fi
-
-          if [ -f "$ANDROID_FILE" ]; then
-            if ! grep -q 'org.jetbrains.kotlin.plugin.compose' "$ANDROID_FILE"; then
-              sed -i '/plugins {/a\    id("org.jetbrains.kotlin.plugin.compose")' "$ANDROID_FILE"
-            fi
-          fi
-
-          if [ -f "$COMPOSE_FILE" ]; then
-            if ! grep -q 'org.jetbrains.kotlin.plugin.compose' "$COMPOSE_FILE"; then
-              sed -i '/plugins {/a\    id("org.jetbrains.kotlin.plugin.compose")' "$COMPOSE_FILE"
-            fi
-
-            if grep -q "kotlin {" "$COMPOSE_FILE" && ! grep -q "androidTarget()" "$COMPOSE_FILE"; then
-              sed -i '/kotlin {/a\    androidTarget()' "$COMPOSE_FILE"
-            fi
-          fi
-
-      - name: Fix gradle properties
-        shell: bash
-        run: |
-          set -euo pipefail
-
+          echo "Fix gradle.properties..."
           touch gradle.properties
-
           grep -q '^android.useAndroidX=' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
           grep -q '^kotlin.code.style=' gradle.properties || echo 'kotlin.code.style=official' >> gradle.properties
           grep -q '^kotlin.mpp.androidSourceSetLayoutVersion=' gradle.properties || echo 'kotlin.mpp.androidSourceSetLayoutVersion=2' >> gradle.properties
           grep -q '^kotlin.mpp.androidGradlePluginCompatibility.nowarn=' gradle.properties || echo 'kotlin.mpp.androidGradlePluginCompatibility.nowarn=true' >> gradle.properties
           grep -q '^android.suppressUnsupportedCompileSdk=' gradle.properties || echo 'android.suppressUnsupportedCompileSdk=35' >> gradle.properties
 
-      - name: Fix sdk-github HTTP client duplicates
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo "Patch Gradle files safely..."
+          python3 <<'PY'
+from pathlib import Path
 
+def add_after_plugins(path, line):
+    p = Path(path)
+    if not p.exists():
+        return
+    text = p.read_text()
+    if line in text:
+        return
+    text = text.replace("plugins {", "plugins {\n    " + line, 1)
+    p.write_text(text)
+
+add_after_plugins("build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false')
+add_after_plugins("androidApp/build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose")')
+add_after_plugins("composeApp/build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose")')
+
+p = Path("composeApp/build.gradle.kts")
+if p.exists():
+    text = p.read_text()
+    if "kotlin {" in text and "androidTarget()" not in text:
+        text = text.replace("kotlin {", "kotlin {\n    androidTarget()", 1)
+        p.write_text(text)
+
+p = Path("androidApp/build.gradle.kts")
+if p.exists():
+    text = p.read_text()
+    if "dependencies {" not in text:
+        text += "\n\ndependencies {\n}\n"
+    deps = [
+        'implementation(project(":composeApp"))',
+        'implementation(project(":core-model"))',
+        'implementation(project(":local-store"))',
+        'implementation(project(":sdk-github"))',
+    ]
+    for dep in deps:
+        if dep not in text:
+            text = text.replace("dependencies {", "dependencies {\n    " + dep, 1)
+    p.write_text(text)
+PY
+
+          echo "Fix GitHub HTTP client..."
           SDK_DIR="sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github"
           mkdir -p "$SDK_DIR"
 
           find sdk-github/src -type f -name "*.kt" \
             ! -path "$SDK_DIR/GitHubHttpClientFactory.kt" \
             -exec grep -l "fun createGitHubHttpClient" {} \; | while read -r file; do
-              echo "Removing duplicate createGitHubHttpClient file: $file"
               rm -f "$file"
           done
 
@@ -125,76 +123,22 @@ fun createGitHubHttpClient(): HttpClient {
 }
 EOF
 
-      - name: Fix androidApp module dependencies
+      - name: Show important files
         shell: bash
         run: |
-          set -euo pipefail
-
-          python3 <<'PY'
-from pathlib import Path
-
-path = Path("androidApp/build.gradle.kts")
-text = path.read_text()
-
-needed = [
-    'implementation(project(":composeApp"))',
-    'implementation(project(":core-model"))',
-    'implementation(project(":local-store"))',
-    'implementation(project(":sdk-github"))',
-]
-
-if "dependencies {" not in text:
-    text += "\n\ndependencies {\n}\n"
-
-for dep in needed:
-    if dep not in text:
-        text = text.replace("dependencies {", f"dependencies {{\n    {dep}", 1)
-
-path.write_text(text)
-PY
-
-          sed -n '1,160p' androidApp/build.gradle.kts
-
-      - name: Show fixed files
-        shell: bash
-        run: |
-          echo "===== build.gradle.kts ====="
-          sed -n '1,120p' build.gradle.kts || true
-
-          echo "===== androidApp/build.gradle.kts ====="
-          sed -n '1,180p' androidApp/build.gradle.kts || true
-
-          echo "===== composeApp/build.gradle.kts ====="
-          sed -n '1,180p' composeApp/build.gradle.kts || true
-
-          echo "===== GitHub client definitions ====="
+          sed -n '1,160p' build.gradle.kts || true
+          sed -n '1,200p' androidApp/build.gradle.kts || true
+          sed -n '1,200p' composeApp/build.gradle.kts || true
           grep -R "fun createGitHubHttpClient" sdk-github/src || true
 
-      - name: Build debug APK
+      - name: Build APK
         shell: bash
         run: |
           set -euo pipefail
-          gradle clean :androidApp:assembleDebug --stacktrace
+          ./gradlew clean :androidApp:assembleDebug --stacktrace || gradle clean :androidApp:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: android-debug-apk
           path: androidApp/build/outputs/apk/debug/*.apk
-
-      - name: Commit fixed project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add .
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-          else
-            git commit -m "Fix Android APK build workflow"
-            git push
-          fi
