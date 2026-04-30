@@ -1,0 +1,86 @@
+name: Fix SDK GitHub Code
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-sdk-github:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Add missing GitHub SDK support files
+        shell: bash
+        run: |
+          set -e
+
+          DIR="sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github"
+          mkdir -p "$DIR"
+
+          cat > "$DIR/GitHubHttpClientFactory.kt" <<'EOF'
+package com.punkcrypto.releasehub.sdk.github
+
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.request.header
+import io.ktor.http.HttpHeaders
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.serialization.json.Json
+
+fun createGitHubHttpClient(): HttpClient {
+    return HttpClient {
+        install(ContentNegotiation) {
+            json(
+                Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                    explicitNulls = false
+                }
+            )
+        }
+
+        defaultRequest {
+            header(HttpHeaders.Accept, "application/vnd.github+json")
+            header("X-GitHub-Api-Version", "2022-11-28")
+            header(HttpHeaders.UserAgent, "ReleaseHubMvp")
+        }
+    }
+}
+EOF
+
+          cat > "$DIR/GitHubApiResponses.kt" <<'EOF'
+package com.punkcrypto.releasehub.sdk.github
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class GitHubRepositorySearchResponse(
+    @SerialName("items")
+    val items: List<RepositoryDto> = emptyList()
+)
+
+typealias GitHubReleaseDto = ReleaseDto
+EOF
+
+      - name: Commit SDK fixes
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No SDK changes needed."
+          else
+            git add sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github
+            git commit -m "Fix missing GitHub SDK support types"
+            git push
+          fi
