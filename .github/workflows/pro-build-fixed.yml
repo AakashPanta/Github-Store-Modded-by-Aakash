@@ -40,7 +40,6 @@ jobs:
 
           python3 <<'PY'
           from pathlib import Path
-          import re
 
           def read(path):
               p = Path(path)
@@ -51,7 +50,7 @@ jobs:
               p.parent.mkdir(parents=True, exist_ok=True)
               p.write_text(text)
 
-          # Fix Kotlin versions
+          # Force Kotlin 2.0.20
           for p in list(Path(".").rglob("*.gradle.kts")) + list(Path(".").rglob("*.toml")):
               text = p.read_text()
               text = text.replace("1.9.24", "2.0.20")
@@ -85,29 +84,37 @@ jobs:
           add_plugin("androidApp/build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose")')
           add_plugin("composeApp/build.gradle.kts", 'id("org.jetbrains.kotlin.plugin.compose")')
 
-          # Add androidTarget to composeApp
+          # composeApp android target
           text = read("composeApp/build.gradle.kts")
           if text and "kotlin {" in text and "androidTarget()" not in text:
               text = text.replace("kotlin {", "kotlin {\n    androidTarget()", 1)
               write("composeApp/build.gradle.kts", text)
 
-          # Add androidApp dependencies
+          # androidApp dependencies
           text = read("androidApp/build.gradle.kts")
           if text:
               if "dependencies {" not in text:
                   text += "\n\ndependencies {\n}\n"
+
               deps = [
                   'implementation(project(":composeApp"))',
                   'implementation(project(":core-model"))',
                   'implementation(project(":local-store"))',
                   'implementation(project(":sdk-github"))',
+                  'implementation("io.ktor:ktor-client-core:2.3.12")',
+                  'implementation("io.ktor:ktor-client-okhttp:2.3.12")',
+                  'implementation("io.ktor:ktor-client-content-negotiation:2.3.12")',
+                  'implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.12")',
+                  'implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")',
               ]
+
               for dep in deps:
                   if dep not in text:
                       text = text.replace("dependencies {", "dependencies {\n    " + dep, 1)
+
               write("androidApp/build.gradle.kts", text)
 
-          # Fix duplicate GitHub HTTP client
+          # Remove duplicate GitHub HTTP client
           sdk_dir = Path("sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github")
           sdk_dir.mkdir(parents=True, exist_ok=True)
 
@@ -148,6 +155,11 @@ jobs:
           }
           '''.replace("          ", ""))
           PY
+
+      - name: Show patched Android build file
+        shell: bash
+        run: |
+          sed -n '1,160p' androidApp/build.gradle.kts || true
 
       - name: Build APK
         shell: bash
