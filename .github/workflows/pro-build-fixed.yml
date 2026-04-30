@@ -1,4 +1,4 @@
-name: Build APK (Professional Stable)
+name: Build APK Professional Stable
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -20,27 +20,72 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Fix Kotlin & Gradle issues
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Fix Kotlin and Gradle issues
+        shell: bash
         run: |
           set -e
 
-          # Force Kotlin 1.9.24 everywhere
-          find . -name "*.gradle.kts" -exec sed -i 's/2\.0\.20/1.9.24/g' {} +
+          echo "Applying safe project fixes..."
 
-          # Ensure androidTarget() exists
-          find . -name "*.gradle.kts" -exec sed -i '/kotlin {/a\    androidTarget()' {} +
+          # Remove invalid Compose compiler plugin references
+          find . -name "*.gradle.kts" -type f -exec sed -i '/libs.plugins.compose.compiler/d' {} +
+          find . -name "*.gradle.kts" -type f -exec sed -i '/org.jetbrains.kotlin.plugin.compose/d' {} +
+          find . -name "*.gradle.kts" -type f -exec sed -i '/compose.compiler/d' {} +
 
-      - name: Grant permission
-        run: chmod +x gradlew
+          # Force stable Kotlin version
+          find . -name "*.gradle.kts" -type f -exec sed -i 's/2\.0\.20/1.9.24/g' {} +
+
+          if [ -f gradle/libs.versions.toml ]; then
+            sed -i 's/2\.0\.20/1.9.24/g' gradle/libs.versions.toml
+            sed -i '/compose-compiler/d' gradle/libs.versions.toml
+            sed -i '/composeCompiler/d' gradle/libs.versions.toml
+            sed -i '/org.jetbrains.kotlin.plugin.compose/d' gradle/libs.versions.toml
+          fi
+
+          # Add androidTarget() only when missing
+          python3 <<'PY'
+          from pathlib import Path
+
+          for p in Path(".").rglob("build.gradle.kts"):
+              text = p.read_text()
+
+              is_kmp = (
+                  'kotlin("multiplatform")' in text
+                  or 'org.jetbrains.kotlin.multiplatform' in text
+                  or 'libs.plugins.kotlin.multiplatform' in text
+              )
+
+              has_android = (
+                  'com.android.library' in text
+                  or 'com.android.application' in text
+                  or 'libs.plugins.android.library' in text
+                  or 'libs.plugins.android.application' in text
+              )
+
+              if is_kmp and has_android and "androidTarget()" not in text and "kotlin {" in text:
+                  text = text.replace("kotlin {", "kotlin {\n    androidTarget()", 1)
+                  p.write_text(text)
+                  print(f"Added androidTarget() to {p}")
+          PY
+
+          # Add basic Gradle properties
+          touch gradle.properties
+          grep -q '^android.useAndroidX=' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
+          grep -q '^kotlin.code.style=' gradle.properties || echo 'kotlin.code.style=official' >> gradle.properties
+          grep -q '^kotlin.mpp.androidSourceSetLayoutVersion=' gradle.properties || echo 'kotlin.mpp.androidSourceSetLayoutVersion=2' >> gradle.properties
+          grep -q '^kotlin.mpp.androidGradlePluginCompatibility.nowarn=' gradle.properties || echo 'kotlin.mpp.androidGradlePluginCompatibility.nowarn=true' >> gradle.properties
 
       - name: Clean build
-        run: ./gradlew clean
+        run: gradle clean --stacktrace
 
       - name: Build APK
-        run: ./gradlew :androidApp:assembleDebug --stacktrace
+        run: gradle :androidApp:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: app-debug-apk
           path: androidApp/build/outputs/apk/debug/*.apk
