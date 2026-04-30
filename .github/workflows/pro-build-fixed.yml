@@ -3,6 +3,9 @@ name: Build APK Professional Stable
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,60 +26,92 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Fix Kotlin and Gradle issues
+      - name: Fix entire project professionally
         shell: bash
         run: |
           set -e
 
-          echo "Applying safe project fixes..."
+          echo "Fixing Kotlin, Compose, and KMP Android target..."
 
-          # Remove invalid Compose compiler plugin references
-          find . -name "*.gradle.kts" -type f -exec sed -i '/libs.plugins.compose.compiler/d' {} +
-          find . -name "*.gradle.kts" -type f -exec sed -i '/org.jetbrains.kotlin.plugin.compose/d' {} +
-          find . -name "*.gradle.kts" -type f -exec sed -i '/compose.compiler/d' {} +
-
-          # Force stable Kotlin version
-          find . -name "*.gradle.kts" -type f -exec sed -i 's/2\.0\.20/1.9.24/g' {} +
-
-          if [ -f gradle/libs.versions.toml ]; then
-            sed -i 's/2\.0\.20/1.9.24/g' gradle/libs.versions.toml
-            sed -i '/compose-compiler/d' gradle/libs.versions.toml
-            sed -i '/composeCompiler/d' gradle/libs.versions.toml
-            sed -i '/org.jetbrains.kotlin.plugin.compose/d' gradle/libs.versions.toml
-          fi
-
-          # Add androidTarget() only when missing
           python3 <<'PY'
-          from pathlib import Path
+from pathlib import Path
+import re
 
-          for p in Path(".").rglob("build.gradle.kts"):
-              text = p.read_text()
+# Force Kotlin 2.0.20 because org.jetbrains.compose 1.8.0 requires Kotlin Gradle Plugin >= 2.0.0
+for path in list(Path(".").rglob("*.gradle.kts")) + list(Path(".").rglob("*.toml")):
+    text = path.read_text(encoding="utf-8")
 
-              is_kmp = (
-                  'kotlin("multiplatform")' in text
-                  or 'org.jetbrains.kotlin.multiplatform' in text
-                  or 'libs.plugins.kotlin.multiplatform' in text
-              )
+    text = re.sub(r'kotlin\s*=\s*"[^"]+"', 'kotlin = "2.0.20"', text)
+    text = re.sub(r'kotlin_version\s*=\s*"[^"]+"', 'kotlin_version = "2.0.20"', text)
+    text = re.sub(r'kotlinVersion\s*=\s*"[^"]+"', 'kotlinVersion = "2.0.20"', text)
 
-              has_android = (
-                  'com.android.library' in text
-                  or 'com.android.application' in text
-                  or 'libs.plugins.android.library' in text
-                  or 'libs.plugins.android.application' in text
-              )
+    text = text.replace('version "1.9.24"', 'version "2.0.20"')
+    text = text.replace('version("1.9.24")', 'version("2.0.20")')
+    text = text.replace('version = "1.9.24"', 'version = "2.0.20"')
+    text = text.replace('version.ref = "kotlin"', 'version.ref = "kotlin"')
 
-              if is_kmp and has_android and "androidTarget()" not in text and "kotlin {" in text:
-                  text = text.replace("kotlin {", "kotlin {\n    androidTarget()", 1)
-                  p.write_text(text)
-                  print(f"Added androidTarget() to {p}")
-          PY
+    # Remove broken compose compiler alias references
+    lines = []
+    for line in text.splitlines():
+        if "libs.plugins.compose.compiler" in line:
+            continue
+        if "alias(libs.plugins.compose.compiler)" in line:
+            continue
+        lines.append(line)
 
-          # Add basic Gradle properties
-          touch gradle.properties
-          grep -q '^android.useAndroidX=' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
-          grep -q '^kotlin.code.style=' gradle.properties || echo 'kotlin.code.style=official' >> gradle.properties
-          grep -q '^kotlin.mpp.androidSourceSetLayoutVersion=' gradle.properties || echo 'kotlin.mpp.androidSourceSetLayoutVersion=2' >> gradle.properties
-          grep -q '^kotlin.mpp.androidGradlePluginCompatibility.nowarn=' gradle.properties || echo 'kotlin.mpp.androidGradlePluginCompatibility.nowarn=true' >> gradle.properties
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+# Add androidTarget() specifically to KMP Android modules
+for path in Path(".").rglob("build.gradle.kts"):
+    text = path.read_text(encoding="utf-8")
+
+    is_kmp = (
+        'kotlin("multiplatform")' in text
+        or 'id("org.jetbrains.kotlin.multiplatform")' in text
+        or "libs.plugins.kotlin.multiplatform" in text
+    )
+
+    has_android = (
+        'com.android.library' in text
+        or 'com.android.application' in text
+        or "libs.plugins.android.library" in text
+        or "libs.plugins.android.application" in text
+    )
+
+    if is_kmp and has_android and "androidTarget()" not in text:
+        text = text.replace("kotlin {", "kotlin {\n    androidTarget()", 1)
+        path.write_text(text, encoding="utf-8")
+        print(f"Added androidTarget() to {path}")
+
+# Required Gradle properties
+props = Path("gradle.properties")
+existing = props.read_text(encoding="utf-8") if props.exists() else ""
+
+required = {
+    "android.useAndroidX": "true",
+    "kotlin.code.style": "official",
+    "kotlin.mpp.androidSourceSetLayoutVersion": "2",
+    "kotlin.mpp.androidGradlePluginCompatibility.nowarn": "true",
+}
+
+lines = existing.splitlines()
+keys = {line.split("=", 1)[0].strip() for line in lines if "=" in line}
+
+for key, value in required.items():
+    if key not in keys:
+        lines.append(f"{key}={value}")
+
+props.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+PY
+
+      - name: Show fixed Gradle files
+        run: |
+          echo "===== root build.gradle.kts ====="
+          sed -n '1,80p' build.gradle.kts || true
+          echo "===== composeApp/build.gradle.kts ====="
+          sed -n '1,120p' composeApp/build.gradle.kts || true
+          echo "===== gradle/libs.versions.toml ====="
+          sed -n '1,120p' gradle/libs.versions.toml || true
 
       - name: Clean build
         run: gradle clean --stacktrace
