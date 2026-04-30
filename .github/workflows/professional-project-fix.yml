@@ -1,0 +1,188 @@
+name: Professional Project Fix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-project:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Professional Gradle/KMP/Android stabilization
+        shell: bash
+        run: |
+          set -e
+
+          echo "Fixing project professionally..."
+
+          # 1. Remove broken Compose compiler alias/plugin usage
+          find . -name "*.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
+            sed -i '/alias(libs.plugins.compose.compiler)/d' "$file"
+            sed -i '/libs.plugins.compose.compiler/d' "$file"
+            sed -i '/org.jetbrains.kotlin.plugin.compose/d' "$file"
+          done
+
+          if [ -f gradle/libs.versions.toml ]; then
+            sed -i '/compose-compiler/d' gradle/libs.versions.toml
+            sed -i '/composeCompiler/d' gradle/libs.versions.toml
+            sed -i '/kotlin-compose/d' gradle/libs.versions.toml
+            sed -i '/kotlinCompose/d' gradle/libs.versions.toml
+            sed -i '/org.jetbrains.kotlin.plugin.compose/d' gradle/libs.versions.toml
+          fi
+
+          # 2. Add androidTarget() to every KMP Android module missing it
+          find . -name "build.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
+            if grep -q 'kotlin("multiplatform")\|id("org.jetbrains.kotlin.multiplatform")\|alias(libs.plugins.kotlin.multiplatform)' "$file" && \
+               grep -q 'com.android.library\|com.android.application\|libs.plugins.android' "$file" && \
+               ! grep -q 'androidTarget()' "$file"; then
+
+              echo "Adding androidTarget() to $file"
+
+              python3 <<PY
+from pathlib import Path
+
+p = Path("$file")
+text = p.read_text()
+
+idx = text.find("kotlin {")
+if idx != -1:
+    brace = text.find("{", idx)
+    insert_at = brace + 1
+    text = text[:insert_at] + "\\n    androidTarget()\\n" + text[insert_at:]
+
+p.write_text(text)
+PY
+            fi
+          done
+
+          # 3. Add safe Android namespace where missing
+          find . -path "*/build.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
+            if grep -q 'android {' "$file" && ! grep -q 'namespace =' "$file"; then
+              module_name=$(basename "$(dirname "$file")" | tr '-' '_' | tr '[:upper:]' '[:lower:]')
+              namespace="com.mrrobot.releasehub.${module_name}"
+
+              echo "Adding namespace $namespace to $file"
+
+              python3 <<PY
+from pathlib import Path
+
+p = Path("$file")
+text = p.read_text()
+namespace = "$namespace"
+
+idx = text.find("android {")
+if idx != -1:
+    brace = text.find("{", idx)
+    insert_at = brace + 1
+    text = text[:insert_at] + f'\\n    namespace = "{namespace}"\\n' + text[insert_at:]
+
+p.write_text(text)
+PY
+            fi
+          done
+
+          # 4. Normalize Android SDK levels where missing
+          find . -path "*/build.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
+            if grep -q 'android {' "$file"; then
+              if ! grep -q 'compileSdk' "$file"; then
+                python3 <<PY
+from pathlib import Path
+
+p = Path("$file")
+text = p.read_text()
+idx = text.find("android {")
+brace = text.find("{", idx)
+text = text[:brace+1] + "\\n    compileSdk = 35\\n" + text[brace+1:]
+p.write_text(text)
+PY
+              fi
+
+              if grep -q 'defaultConfig {' "$file" && ! grep -q 'minSdk' "$file"; then
+                python3 <<PY
+from pathlib import Path
+
+p = Path("$file")
+text = p.read_text()
+idx = text.find("defaultConfig {")
+brace = text.find("{", idx)
+text = text[:brace+1] + "\\n        minSdk = 24\\n" + text[brace+1:]
+p.write_text(text)
+PY
+              fi
+            fi
+          done
+
+          # 5. Add Java 17 compile options where missing
+          find . -path "*/build.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
+            if grep -q 'android {' "$file" && ! grep -q 'sourceCompatibility = JavaVersion.VERSION_17' "$file"; then
+              python3 <<PY
+from pathlib import Path
+
+p = Path("$file")
+text = p.read_text()
+
+block = '''
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+'''
+
+android_idx = text.find("android {")
+if android_idx != -1:
+    depth = 0
+    end = None
+    for i in range(android_idx, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end:
+        text = text[:end] + block + "\\n" + text[end:]
+
+p.write_text(text)
+PY
+            fi
+          done
+
+          # 6. Stabilize gradle.properties
+          touch gradle.properties
+
+          grep -q '^org.gradle.jvmargs=' gradle.properties || echo 'org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8' >> gradle.properties
+          grep -q '^kotlin.code.style=' gradle.properties || echo 'kotlin.code.style=official' >> gradle.properties
+          grep -q '^android.useAndroidX=' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
+          grep -q '^kotlin.mpp.androidSourceSetLayoutVersion=' gradle.properties || echo 'kotlin.mpp.androidSourceSetLayoutVersion=2' >> gradle.properties
+          grep -q '^kotlin.mpp.androidGradlePluginCompatibility.nowarn=' gradle.properties || echo 'kotlin.mpp.androidGradlePluginCompatibility.nowarn=true' >> gradle.properties
+
+          # 7. Fix direct compose.* dependency accessors in androidApp
+          if [ -f androidApp/build.gradle.kts ]; then
+            sed -i 's/implementation(compose\.ui)/implementation("androidx.compose.ui:ui")/g' androidApp/build.gradle.kts
+            sed -i 's/implementation(compose\.material3)/implementation("androidx.compose.material3:material3")/g' androidApp/build.gradle.kts
+            sed -i 's/implementation(compose\.foundation)/implementation("androidx.compose.foundation:foundation")/g' androidApp/build.gradle.kts
+            sed -i 's/implementation(compose\.runtime)/implementation("androidx.compose.runtime:runtime")/g' androidApp/build.gradle.kts
+          fi
+
+      - name: Commit professional fixes
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes needed."
+          else
+            git add .
+            git commit -m "Professionally stabilize Android KMP build"
+            git push
+          fi
