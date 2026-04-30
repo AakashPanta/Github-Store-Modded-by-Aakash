@@ -1,0 +1,46 @@
+name: Build APK (Professional Stable)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Fix Kotlin & Gradle issues
+        run: |
+          set -e
+
+          # Force Kotlin 1.9.24 everywhere
+          find . -name "*.gradle.kts" -exec sed -i 's/2\.0\.20/1.9.24/g' {} +
+
+          # Ensure androidTarget() exists
+          find . -name "*.gradle.kts" -exec sed -i '/kotlin {/a\    androidTarget()' {} +
+
+      - name: Grant permission
+        run: chmod +x gradlew
+
+      - name: Clean build
+        run: ./gradlew clean
+
+      - name: Build APK
+        run: ./gradlew :androidApp:assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: androidApp/build/outputs/apk/debug/*.apk
