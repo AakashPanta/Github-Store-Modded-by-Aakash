@@ -1,0 +1,98 @@
+name: Fix Duplicate GitHub HTTP Client
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    name: Fix SDK duplicate client
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Remove duplicate GitHub HTTP client files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK_DIR="sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github"
+          mkdir -p "$SDK_DIR"
+
+          echo "Searching duplicate createGitHubHttpClient definitions..."
+          grep -R "fun createGitHubHttpClient" sdk-github/src || true
+
+          find sdk-github/src -type f -name "*.kt" \
+            ! -path "$SDK_DIR/GitHubHttpClientFactory.kt" \
+            -exec grep -l "fun createGitHubHttpClient" {} \; | while read -r file; do
+              echo "Removing duplicate function file: $file"
+              rm -f "$file"
+          done
+
+          cat > "$SDK_DIR/GitHubHttpClientFactory.kt" <<'EOF'
+          package com.punkcrypto.releasehub.sdk.github
+
+          import io.ktor.client.HttpClient
+          import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+          import io.ktor.client.plugins.defaultRequest
+          import io.ktor.client.request.header
+          import io.ktor.http.HttpHeaders
+          import io.ktor.serialization.kotlinx.json.json
+          import kotlinx.serialization.json.Json
+
+          internal fun createGitHubHttpClient(): HttpClient {
+              return HttpClient {
+                  install(ContentNegotiation) {
+                      json(
+                          Json {
+                              ignoreUnknownKeys = true
+                              isLenient = true
+                              explicitNulls = false
+                          }
+                      )
+                  }
+
+                  defaultRequest {
+                      header(HttpHeaders.Accept, "application/vnd.github+json")
+                      header("X-GitHub-Api-Version", "2022-11-28")
+                      header(HttpHeaders.UserAgent, "ReleaseHubMvp")
+                  }
+              }
+          }
+          EOF
+
+          echo "Final client definitions:"
+          grep -R "fun createGitHubHttpClient" sdk-github/src
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :androidApp:assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: androidApp/build/outputs/apk/debug/*.apk
+
+      - name: Commit fixed project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Fix duplicate GitHub HTTP client"
+            git push
+          fi
