@@ -1,4 +1,4 @@
-name: Fix androidApp build.gradle.kts
+name: Fix Kotlin Compose Plugin
 
 on:
   workflow_dispatch:
@@ -7,67 +7,57 @@ permissions:
   contents: write
 
 jobs:
-  fix-build-gradle:
+  fix-kotlin-compose-plugin:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Rewrite androidApp build file
+      - name: Remove invalid Kotlin Compose plugin
         shell: bash
         run: |
-          cat > androidApp/build.gradle.kts <<'EOF'
-          plugins {
-              alias(libs.plugins.android.application)
-              alias(libs.plugins.kotlin.android)
-              alias(libs.plugins.compose.compiler)
-          }
+          set -e
 
-          android {
-              namespace = "com.punkcrypto.releasehub"
-              compileSdk = 35
+          echo "Removing invalid org.jetbrains.kotlin.plugin.compose plugin..."
 
-              defaultConfig {
-                  applicationId = "com.punkcrypto.releasehub"
-                  minSdk = 26
-                  targetSdk = 35
-                  versionCode = 1
-                  versionName = "0.1.0"
-              }
+          find . -name "*.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
+            sed -i '/org.jetbrains.kotlin.plugin.compose/d' "$file"
+          done
 
-              buildFeatures {
-                  compose = true
-              }
-
-              compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
-          }
-
-          dependencies {
-              implementation(project(":composeApp"))
-              implementation(libs.androidx.activity.compose)
-              implementation(libs.androidx.core.ktx)
-              implementation(libs.kotlinx.coroutines.android)
-          }
-          EOF
-
-      - name: Commit changes
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo "No changes to commit."
-            exit 0
+          if [ -f gradle/libs.versions.toml ]; then
+            sed -i '/kotlin.*compose/d' gradle/libs.versions.toml
+            sed -i '/composeCompiler/d' gradle/libs.versions.toml
           fi
 
+      - name: Keep stable plugin versions
+        shell: bash
+        run: |
+          set -e
+
+          find . -name "*.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
+            sed -i 's/version "8\.9\.0"/version "8.5.2"/g' "$file"
+            sed -i 's/version("8\.9\.0")/version("8.5.2")/g' "$file"
+
+            sed -i 's/version "2\.1\.0"/version "1.9.24"/g' "$file"
+            sed -i 's/version("2\.1\.0")/version("1.9.24")/g' "$file"
+
+            sed -i 's/version "1\.8\.0"/version "1.6.11"/g' "$file"
+            sed -i 's/version("1\.8\.0")/version("1.6.11")/g' "$file"
+          done
+
+      - name: Commit and push fix
+        shell: bash
+        run: |
+          set -e
+
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add androidApp/build.gradle.kts
-          git commit -m "Fix androidApp Compose dependency wiring"
-          git push
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes needed."
+          else
+            git add .
+            git commit -m "Remove invalid Kotlin Compose Gradle plugin"
+            git push
+          fi
