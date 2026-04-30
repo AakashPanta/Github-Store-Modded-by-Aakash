@@ -1,0 +1,90 @@
+name: Fix Gradle Build Config
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-gradle:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN || github.token }}
+
+      - name: Fix Gradle plugin versions
+        shell: bash
+        run: |
+          set -e
+
+          echo "Fixing invalid Gradle/Kotlin/Compose versions..."
+
+          find . -name "*.gradle.kts" -type f -print0 | while IFS= read -r -d '' file; do
+            sed -i 's/version "8\.9\.0"/version "8.5.2"/g' "$file"
+            sed -i 's/version("8\.9\.0")/version("8.5.2")/g' "$file"
+
+            sed -i 's/version "2\.1\.0"/version "1.9.24"/g' "$file"
+            sed -i 's/version("2\.1\.0")/version("1.9.24")/g' "$file"
+
+            sed -i 's/version "1\.8\.0"/version "1.6.11"/g' "$file"
+            sed -i 's/version("1\.8\.0")/version("1.6.11")/g' "$file"
+          done
+
+      - name: Fix Gradle wrapper version
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
+            sed -i 's#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-bin.zip#g' gradle/wrapper/gradle-wrapper.properties
+          fi
+
+      - name: Ensure plugin repositories exist
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f settings.gradle.kts ]; then
+            if ! grep -q "gradlePluginPortal()" settings.gradle.kts; then
+              python3 <<'PY'
+from pathlib import Path
+
+p = Path("settings.gradle.kts")
+text = p.read_text()
+
+if "pluginManagement" not in text:
+    block = """pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+"""
+    text = block + text
+
+p.write_text(text)
+PY
+            fi
+          fi
+
+      - name: Commit fixed Gradle config
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes needed."
+          else
+            git add .
+            git commit -m "Fix Gradle Android build versions"
+            git push
+          fi
