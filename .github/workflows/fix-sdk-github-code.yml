@@ -7,22 +7,22 @@ permissions:
   contents: write
 
 jobs:
-  fix-sdk-github:
+  fix-sdk-github-code:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Add missing GitHub SDK support files
+      - name: Create missing GitHub SDK files
         shell: bash
         run: |
           set -e
 
-          DIR="sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github"
-          mkdir -p "$DIR"
+          SDK_DIR="sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github"
+          mkdir -p "$SDK_DIR"
 
-          cat > "$DIR/GitHubHttpClientFactory.kt" <<'EOF'
+          cat > "$SDK_DIR/GitHubHttpClientFactory.kt" <<'KOTLIN'
 package com.punkcrypto.releasehub.sdk.github
 
 import io.ktor.client.HttpClient
@@ -40,7 +40,6 @@ fun createGitHubHttpClient(): HttpClient {
                 Json {
                     ignoreUnknownKeys = true
                     isLenient = true
-                    explicitNulls = false
                 }
             )
         }
@@ -52,9 +51,9 @@ fun createGitHubHttpClient(): HttpClient {
         }
     }
 }
-EOF
+KOTLIN
 
-          cat > "$DIR/GitHubApiResponses.kt" <<'EOF'
+          cat > "$SDK_DIR/GitHubApiResponses.kt" <<'KOTLIN'
 package com.punkcrypto.releasehub.sdk.github
 
 import kotlinx.serialization.SerialName
@@ -67,9 +66,9 @@ data class GitHubRepositorySearchResponse(
 )
 
 typealias GitHubReleaseDto = ReleaseDto
-EOF
+KOTLIN
 
-      - name: Commit SDK fixes
+      - name: Commit and push SDK fix
         shell: bash
         run: |
           set -e
@@ -78,9 +77,9 @@ EOF
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           if git diff --quiet; then
-            echo "No SDK changes needed."
+            echo "No changes needed."
           else
             git add sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github
-            git commit -m "Fix missing GitHub SDK support types"
+            git commit -m "Fix missing GitHub SDK code"
             git push
           fi
