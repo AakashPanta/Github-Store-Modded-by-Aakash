@@ -8,6 +8,7 @@ permissions:
 
 jobs:
   build:
+    name: Fix Project and Build APK
     runs-on: ubuntu-latest
 
     steps:
@@ -26,33 +27,26 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Fix Kotlin Compose versions
+      - name: Full project repair
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
+          echo "Fixing Kotlin version..."
           find . -name "*.gradle.kts" -type f -exec sed -i 's/1\.9\.24/2.0.20/g' {} \;
           find . -name "*.toml" -type f -exec sed -i 's/1\.9\.24/2.0.20/g' {} \;
-
-      - name: Add Compose Compiler plugin
-        shell: bash
-        run: |
-          set -e
 
           ROOT_FILE="build.gradle.kts"
           ANDROID_FILE="androidApp/build.gradle.kts"
           COMPOSE_FILE="composeApp/build.gradle.kts"
 
-          if [ -f "$ROOT_FILE" ]; then
-            if ! grep -q 'org.jetbrains.kotlin.plugin.compose' "$ROOT_FILE"; then
-              sed -i '/plugins {/a\    id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false' "$ROOT_FILE"
-            fi
+          echo "Adding Compose compiler plugin..."
+          if [ -f "$ROOT_FILE" ] && ! grep -q 'org.jetbrains.kotlin.plugin.compose' "$ROOT_FILE"; then
+            sed -i '/plugins {/a\    id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false' "$ROOT_FILE"
           fi
 
-          if [ -f "$ANDROID_FILE" ]; then
-            if ! grep -q 'org.jetbrains.kotlin.plugin.compose' "$ANDROID_FILE"; then
-              sed -i '/plugins {/a\    id("org.jetbrains.kotlin.plugin.compose")' "$ANDROID_FILE"
-            fi
+          if [ -f "$ANDROID_FILE" ] && ! grep -q 'org.jetbrains.kotlin.plugin.compose' "$ANDROID_FILE"; then
+            sed -i '/plugins {/a\    id("org.jetbrains.kotlin.plugin.compose")' "$ANDROID_FILE"
           fi
 
           if [ -f "$COMPOSE_FILE" ]; then
@@ -65,28 +59,71 @@ jobs:
             fi
           fi
 
-      - name: Fix gradle properties
-        shell: bash
-        run: |
-          set -e
-
+          echo "Fixing gradle.properties..."
           touch gradle.properties
           grep -q '^android.useAndroidX=' gradle.properties || echo 'android.useAndroidX=true' >> gradle.properties
           grep -q '^kotlin.code.style=' gradle.properties || echo 'kotlin.code.style=official' >> gradle.properties
           grep -q '^kotlin.mpp.androidSourceSetLayoutVersion=' gradle.properties || echo 'kotlin.mpp.androidSourceSetLayoutVersion=2' >> gradle.properties
           grep -q '^kotlin.mpp.androidGradlePluginCompatibility.nowarn=' gradle.properties || echo 'kotlin.mpp.androidGradlePluginCompatibility.nowarn=true' >> gradle.properties
+          grep -q '^android.suppressUnsupportedCompileSdk=' gradle.properties || echo 'android.suppressUnsupportedCompileSdk=35' >> gradle.properties
+
+          echo "Fixing duplicate GitHub HTTP client..."
+          SDK_DIR="sdk-github/src/commonMain/kotlin/com/punkcrypto/releasehub/sdk/github"
+          mkdir -p "$SDK_DIR"
+
+          find sdk-github/src -type f -name "*.kt" \
+            ! -path "$SDK_DIR/GitHubHttpClientFactory.kt" \
+            -exec grep -l "fun createGitHubHttpClient" {} \; | while read -r file; do
+              echo "Removing duplicate client file: $file"
+              rm -f "$file"
+          done
+
+          cat > "$SDK_DIR/GitHubHttpClientFactory.kt" <<'EOF'
+          package com.punkcrypto.releasehub.sdk.github
+
+          import io.ktor.client.HttpClient
+          import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+          import io.ktor.client.plugins.defaultRequest
+          import io.ktor.client.request.header
+          import io.ktor.http.HttpHeaders
+          import io.ktor.serialization.kotlinx.json.json
+          import kotlinx.serialization.json.Json
+
+          internal fun createGitHubHttpClient(): HttpClient {
+              return HttpClient {
+                  install(ContentNegotiation) {
+                      json(
+                          Json {
+                              ignoreUnknownKeys = true
+                              isLenient = true
+                              explicitNulls = false
+                          }
+                      )
+                  }
+
+                  defaultRequest {
+                      header(HttpHeaders.Accept, "application/vnd.github+json")
+                      header("X-GitHub-Api-Version", "2022-11-28")
+                      header(HttpHeaders.UserAgent, "ReleaseHubMvp")
+                  }
+              }
+          }
+          EOF
 
       - name: Show fixed files
         shell: bash
         run: |
-          sed -n '1,80p' build.gradle.kts || true
-          sed -n '1,120p' androidApp/build.gradle.kts || true
-          sed -n '1,120p' composeApp/build.gradle.kts || true
+          sed -n '1,100p' build.gradle.kts || true
+          sed -n '1,140p' androidApp/build.gradle.kts || true
+          sed -n '1,140p' composeApp/build.gradle.kts || true
+          grep -R "fun createGitHubHttpClient" sdk-github/src || true
 
       - name: Clean build
+        shell: bash
         run: gradle clean --stacktrace
 
       - name: Build APK
+        shell: bash
         run: gradle :androidApp:assembleDebug --stacktrace
 
       - name: Upload APK
@@ -94,3 +131,20 @@ jobs:
         with:
           name: app-debug-apk
           path: androidApp/build/outputs/apk/debug/*.apk
+
+      - name: Commit fixed project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Fix Android Kotlin Compose build"
+            git push
+          fi
