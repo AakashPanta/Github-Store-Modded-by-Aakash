@@ -1,4 +1,4 @@
-name: Fix And Build APK
+name: Build APK Stable
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ permissions:
 
 jobs:
   build:
-    name: Fix project and build APK
     runs-on: ubuntu-latest
 
     steps:
@@ -27,18 +26,45 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Fix Android network config
+      - name: Find Gradle project root
+        id: project
         shell: bash
         run: |
           set -e
 
-          MANIFEST="androidApp/src/main/AndroidManifest.xml"
-          XML_DIR="androidApp/src/main/res/xml"
-          NETWORK_FILE="$XML_DIR/network_security_config.xml"
+          ROOT=""
 
-          mkdir -p "$XML_DIR"
+          if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ]; then
+            ROOT="."
+          else
+            ROOT=$(find . -maxdepth 4 \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | head -n 1 | xargs dirname)
+          fi
 
-          cat > "$NETWORK_FILE" <<'EOF'
+          if [ -z "$ROOT" ]; then
+            echo "No Gradle project found"
+            find . -maxdepth 4 -type f | sort
+            exit 1
+          fi
+
+          echo "Gradle project root: $ROOT"
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Fix Android network security
+        shell: bash
+        run: |
+          set -e
+
+          cd "${{ steps.project.outputs.root }}"
+
+          if [ ! -d "androidApp" ]; then
+            echo "androidApp module not found"
+            find . -maxdepth 3 -type d | sort
+            exit 1
+          fi
+
+          mkdir -p androidApp/src/main/res/xml
+
+          cat > androidApp/src/main/res/xml/network_security_config.xml <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <base-config cleartextTrafficPermitted="true" />
@@ -61,15 +87,16 @@ import re
 manifest = Path("androidApp/src/main/AndroidManifest.xml")
 
 if not manifest.exists():
-    raise SystemExit("AndroidManifest.xml not found")
+    raise SystemExit("androidApp/src/main/AndroidManifest.xml not found")
 
 text = manifest.read_text(encoding="utf-8")
 
-m = re.search(r"<application\b([^>]*)>", text, re.DOTALL)
-if not m:
-    raise SystemExit("No <application> tag found")
+match = re.search(r"<application\b([^>]*)>", text, re.DOTALL)
 
-attrs = m.group(1)
+if not match:
+    raise SystemExit("No <application> tag found in AndroidManifest.xml")
+
+attrs = match.group(1)
 attrs = re.sub(r'\sandroid:usesCleartextTraffic="[^"]*"', "", attrs)
 attrs = re.sub(r'\sandroid:networkSecurityConfig="[^"]*"', "", attrs)
 
@@ -80,7 +107,7 @@ new_tag = (
     + ' android:networkSecurityConfig="@xml/network_security_config">'
 )
 
-text = text[:m.start()] + new_tag + text[m.end():]
+text = text[:match.start()] + new_tag + text[match.end():]
 manifest.write_text(text, encoding="utf-8")
 PY
 
@@ -88,6 +115,8 @@ PY
         shell: bash
         run: |
           set -e
+
+          cd "${{ steps.project.outputs.root }}"
 
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
@@ -100,9 +129,10 @@ PY
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: androidApp/build/outputs/apk/debug/*.apk
+          path: |
+            **/androidApp/build/outputs/apk/debug/*.apk
 
-      - name: Commit fixes
+      - name: Commit fixed files
         shell: bash
         run: |
           set -e
@@ -110,11 +140,11 @@ PY
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add androidApp/src/main/AndroidManifest.xml androidApp/src/main/res/xml/network_security_config.xml
+          git add .
 
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Fix Android network config"
+            git commit -m "Fix Android network security config"
             git push
           fi
