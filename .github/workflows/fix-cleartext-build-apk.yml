@@ -8,7 +8,6 @@ permissions:
 
 jobs:
   fix-and-build:
-    name: Fix localhost cleartext and build debug APK
     runs-on: ubuntu-latest
 
     steps:
@@ -27,151 +26,93 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Detect Android app module
-        id: detect
+      - name: Fix localhost cleartext
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          if [ -f "androidApp/build.gradle.kts" ] || [ -f "androidApp/build.gradle" ]; then
-            echo "module=androidApp" >> "$GITHUB_OUTPUT"
-            echo "task=:androidApp:assembleDebug" >> "$GITHUB_OUTPUT"
-            echo "apk_path=androidApp/build/outputs/apk/debug/*.apk" >> "$GITHUB_OUTPUT"
-            exit 0
+          MODULE="androidApp"
+
+          if [ ! -f "$MODULE/src/main/AndroidManifest.xml" ]; then
+            MODULE="app"
           fi
 
-          if [ -f "app/build.gradle.kts" ] || [ -f "app/build.gradle" ]; then
-            echo "module=app" >> "$GITHUB_OUTPUT"
-            echo "task=:app:assembleDebug" >> "$GITHUB_OUTPUT"
-            echo "apk_path=app/build/outputs/apk/debug/*.apk" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "No Android app module found. Expected androidApp or app."
-          find . -maxdepth 3 -name "build.gradle.kts" -o -name "build.gradle"
-          exit 1
-
-      - name: Fix cleartext localhost network security error
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MODULE="${{ steps.detect.outputs.module }}"
           MANIFEST="$MODULE/src/main/AndroidManifest.xml"
-          RES_XML_DIR="$MODULE/src/main/res/xml"
-          NETWORK_SECURITY_FILE="$RES_XML_DIR/network_security_config.xml"
+          RES_XML="$MODULE/src/main/res/xml"
+          CONFIG="$RES_XML/network_security_config.xml"
 
           if [ ! -f "$MANIFEST" ]; then
-            echo "AndroidManifest.xml not found at $MANIFEST"
+            echo "AndroidManifest.xml not found"
             exit 1
           fi
 
-          mkdir -p "$RES_XML_DIR"
+          mkdir -p "$RES_XML"
 
-          cat > "$NETWORK_SECURITY_FILE" <<'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">0.0.0.0</domain>
-    </domain-config>
-</network-security-config>
-EOF
+          cat > "$CONFIG" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+              <domain-config cleartextTrafficPermitted="true">
+                  <domain includeSubdomains="true">localhost</domain>
+                  <domain includeSubdomains="true">127.0.0.1</domain>
+                  <domain includeSubdomains="true">10.0.2.2</domain>
+                  <domain includeSubdomains="true">0.0.0.0</domain>
+              </domain-config>
+          </network-security-config>
+          EOF
 
-          python3 <<'PY'
-from pathlib import Path
-import re
-import os
+          python3 <<PY
+          from pathlib import Path
+          import re
 
-module = os.environ.get("MODULE_NAME")
-manifest_path = Path(f"{module}/src/main/AndroidManifest.xml")
+          manifest = Path("$MANIFEST")
+          text = manifest.read_text()
 
-text = manifest_path.read_text(encoding="utf-8")
+          app = re.search(r"<application\\b[^>]*>", text, re.S)
+          if not app:
+              raise SystemExit("No application tag found")
 
-match = re.search(r"<application\b[^>]*>", text, flags=re.DOTALL)
-if not match:
-    raise SystemExit("No <application> tag found in AndroidManifest.xml")
+          tag = app.group(0)
 
-tag = match.group(0)
+          def put_attr(tag, key, value):
+              if key in tag:
+                  return re.sub(rf'{key}="[^"]*"', f'{key}="{value}"', tag)
+              return tag.replace("<application", f'<application {key}="{value}"', 1)
 
-def set_android_attr(tag_text: str, name: str, value: str) -> str:
-    pattern = rf'\s{name}="[^"]*"'
-    replacement = f' {name}="{value}"'
-    if re.search(pattern, tag_text):
-        return re.sub(pattern, replacement, tag_text, count=1)
-    return tag_text[:-1].rstrip() + replacement + ">"
+          tag = put_attr(tag, "android:usesCleartextTraffic", "true")
+          tag = put_attr(tag, "android:networkSecurityConfig", "@xml/network_security_config")
 
-tag = set_android_attr(
-    tag,
-    "android:networkSecurityConfig",
-    "@xml/network_security_config"
-)
-
-tag = set_android_attr(
-    tag,
-    "android:usesCleartextTraffic",
-    "true"
-)
-
-text = text[:match.start()] + tag + text[match.end():]
-manifest_path.write_text(text, encoding="utf-8")
-PY
-        env:
-          MODULE_NAME: ${{ steps.detect.outputs.module }}
-
-      - name: Show fixed files
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MODULE="${{ steps.detect.outputs.module }}"
-
-          echo "===== AndroidManifest.xml ====="
-          sed -n '1,160p' "$MODULE/src/main/AndroidManifest.xml"
-
-          echo ""
-          echo "===== network_security_config.xml ====="
-          sed -n '1,160p' "$MODULE/src/main/res/xml/network_security_config.xml"
+          text = text[:app.start()] + tag + text[app.end():]
+          manifest.write_text(text)
+          PY
 
       - name: Build APK
         shell: bash
         run: |
-          set -euo pipefail
-
-          BUILD_TASK="${{ steps.detect.outputs.task }}"
+          set -e
 
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
-            ./gradlew clean "$BUILD_TASK" --stacktrace
+            ./gradlew clean :androidApp:assembleDebug --stacktrace || ./gradlew clean :app:assembleDebug --stacktrace
           else
-            echo "gradlew not found. Using system Gradle."
-            gradle clean "$BUILD_TASK" --stacktrace
+            gradle clean :androidApp:assembleDebug --stacktrace || gradle clean :app:assembleDebug --stacktrace
           fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: releasehub-debug-apk
-          path: ${{ steps.detect.outputs.apk_path }}
-          if-no-files-found: error
+          name: fixed-debug-apk
+          path: |
+            androidApp/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/debug/*.apk
 
-      - name: Commit fixed project
+      - name: Commit fixes
         shell: bash
         run: |
-          set -euo pipefail
-
-          MODULE="${{ steps.detect.outputs.module }}"
+          set -e
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add "$MODULE/src/main/AndroidManifest.xml" "$MODULE/src/main/res/xml/network_security_config.xml"
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-          else
-            git commit -m "Fix localhost cleartext network security config"
-            git push
-          fi
+          git add .
+          git diff --cached --quiet || git commit -m "Fix cleartext localhost network security"
+          git push || true
