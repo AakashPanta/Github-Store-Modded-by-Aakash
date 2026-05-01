@@ -1,4 +1,4 @@
-name: Build APK Stable
+name: Build APK Final Stable
 
 on:
   workflow_dispatch:
@@ -11,115 +11,39 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK
+      - name: Setup Android
         uses: android-actions/setup-android@v3
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Find Gradle project root
-        id: project
+      - name: Install Gradle if wrapper missing
         shell: bash
         run: |
           set -e
-
-          ROOT=""
-
-          if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ]; then
-            ROOT="."
+          if [ ! -f "./gradlew" ]; then
+            echo "No Gradle wrapper found. Installing Gradle..."
+            sudo apt-get update
+            sudo apt-get install -y gradle
           else
-            ROOT=$(find . -maxdepth 4 \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | head -n 1 | xargs dirname)
+            chmod +x ./gradlew
           fi
-
-          if [ -z "$ROOT" ]; then
-            echo "No Gradle project found"
-            find . -maxdepth 4 -type f | sort
-            exit 1
-          fi
-
-          echo "Gradle project root: $ROOT"
-          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
-
-      - name: Fix Android network security
-        shell: bash
-        run: |
-          set -e
-
-          cd "${{ steps.project.outputs.root }}"
-
-          if [ ! -d "androidApp" ]; then
-            echo "androidApp module not found"
-            find . -maxdepth 3 -type d | sort
-            exit 1
-          fi
-
-          mkdir -p androidApp/src/main/res/xml
-
-          cat > androidApp/src/main/res/xml/network_security_config.xml <<'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">api.github.com</domain>
-        <domain includeSubdomains="true">github.com</domain>
-        <domain includeSubdomains="true">raw.githubusercontent.com</domain>
-        <domain includeSubdomains="true">objects.githubusercontent.com</domain>
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-        <domain includeSubdomains="true">10.0.2.2</domain>
-    </domain-config>
-</network-security-config>
-EOF
-
-          python3 <<'PY'
-from pathlib import Path
-import re
-
-manifest = Path("androidApp/src/main/AndroidManifest.xml")
-
-if not manifest.exists():
-    raise SystemExit("androidApp/src/main/AndroidManifest.xml not found")
-
-text = manifest.read_text(encoding="utf-8")
-
-match = re.search(r"<application\b([^>]*)>", text, re.DOTALL)
-
-if not match:
-    raise SystemExit("No <application> tag found in AndroidManifest.xml")
-
-attrs = match.group(1)
-attrs = re.sub(r'\sandroid:usesCleartextTraffic="[^"]*"', "", attrs)
-attrs = re.sub(r'\sandroid:networkSecurityConfig="[^"]*"', "", attrs)
-
-new_tag = (
-    "<application"
-    + attrs
-    + ' android:usesCleartextTraffic="true"'
-    + ' android:networkSecurityConfig="@xml/network_security_config">'
-)
-
-text = text[:match.start()] + new_tag + text[match.end():]
-manifest.write_text(text, encoding="utf-8")
-PY
 
       - name: Build APK
         shell: bash
         run: |
           set -e
 
-          cd "${{ steps.project.outputs.root }}"
-
           if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
             ./gradlew clean :androidApp:assembleDebug --stacktrace
           else
             gradle clean :androidApp:assembleDebug --stacktrace
@@ -129,22 +53,4 @@ PY
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: |
-            **/androidApp/build/outputs/apk/debug/*.apk
-
-      - name: Commit fixed files
-        shell: bash
-        run: |
-          set -e
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add .
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Fix Android network security config"
-            git push
-          fi
+          path: androidApp/build/outputs/apk/debug/*.apk
